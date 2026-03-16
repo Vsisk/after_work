@@ -10,6 +10,7 @@ from billing_dsl_agent.services.resource_index import (
     build_function_index,
 )
 from billing_dsl_agent.types.common import ContextScope, QueryMode
+from billing_dsl_agent.types.context import ContextVarDef
 from billing_dsl_agent.types.intent import IntentSourceType, NodeIntent
 from billing_dsl_agent.types.plan import (
     BOBinding,
@@ -24,7 +25,16 @@ from billing_dsl_agent.types.plan import (
 class DefaultResourceMatcher:
     """Minimal but working matcher using string-based heuristic matching."""
 
+    _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+        "客户性别": ("gender", "sex", "customergender", "custsex"),
+        "gender": ("gender", "sex", "customergender", "custsex"),
+        "sex": ("sex", "gender", "custsex"),
+        "账期": ("billcycle", "cycle", "iirrbillcycle"),
+    }
+
     def match(self, intent: NodeIntent, env: ResolvedEnvironment) -> ResourceBinding:
+        """Match resources from resolved environment against intent text and slots."""
+
         requirement = (intent.raw_requirement or "").strip()
 
         global_index = build_context_index_from_vars(env.global_context_vars)
@@ -36,6 +46,7 @@ class DefaultResourceMatcher:
         bo_bindings: list[BOBinding] = []
         function_bindings: list[FunctionBinding] = []
         missing_resources: list[MissingResource] = []
+        semantic_bindings: dict[str, str] = {}
 
         context_seen: Set[tuple[str, ContextScope, str | None]] = set()
         bo_seen: Set[tuple[str, QueryMode, str | None]] = set()
@@ -87,6 +98,15 @@ class DefaultResourceMatcher:
                     )
                 )
 
+        self._bind_semantic_condition_field(
+            intent=intent,
+            env=env,
+            context_bindings=context_bindings,
+            context_seen=context_seen,
+            semantic_bindings=semantic_bindings,
+            missing_resources=missing_resources,
+        )
+
         if wants_bo or self._contains_any(search_texts, ["select", "fetch", "bo"]):
             matched_bo_names = self._match_names(search_texts, bo_index.by_name.keys())
             inferred_mode = self._infer_query_mode(search_texts)
@@ -135,7 +155,83 @@ class DefaultResourceMatcher:
             bo_bindings=bo_bindings,
             function_bindings=function_bindings,
             missing_resources=missing_resources,
+            semantic_bindings=semantic_bindings,
         )
+
+    def _bind_semantic_condition_field(
+        self,
+        intent: NodeIntent,
+        env: ResolvedEnvironment,
+        context_bindings: list[ContextBinding],
+        context_seen: Set[tuple[str, ContextScope, str | None]],
+        semantic_bindings: dict[str, str],
+        missing_resources: list[MissingResource],
+    ) -> None:
+        """Bind semantic condition field hint to context variable/field if possible."""
+
+        field_hint = str(intent.semantic_slots.get("condition_field_hint", "") or "").strip()
+        if not field_hint:
+            return
+
+        binding = self._match_semantic_field_hint(field_hint, env)
+        if binding is None:
+            missing_resources.append(
+                MissingResource(
+                    resource_type="context",
+                    resource_name=field_hint,
+                    reason="condition field unresolved from semantic slots",
+                )
+            )
+            return
+
+        key = (binding.var_name, binding.scope, binding.field_name)
+        if key not in context_seen:
+            context_seen.add(key)
+            context_bindings.append(binding)
+
+        path_prefix = "$ctx$" if binding.scope == ContextScope.GLOBAL else "$local$"
+        path = f"{path_prefix}.{binding.var_name}"
+        if binding.field_name:
+            path = f"{path}.{binding.field_name}"
+        semantic_bindings["condition_field"] = path
+
+    def _match_semantic_field_hint(self, field_hint: str, env: ResolvedEnvironment) -> ContextBinding | None:
+        """Try exact/alias-based matching for semantic field hints."""
+
+        normalized_hint = self._normalize_token(field_hint)
+        probes = {normalized_hint}
+        probes.update(self._FIELD_ALIASES.get(field_hint, ()))
+        probes.update(self._FIELD_ALIASES.get(normalized_hint, ()))
+        probes = {self._normalize_token(item) for item in probes if item}
+
+        for scope, vars_ in ((ContextScope.GLOBAL, env.global_context_vars), (ContextScope.LOCAL, env.local_context_vars)):
+            matched = self._match_context_vars_by_probes(scope=scope, context_vars=vars_, probes=probes)
+            if matched is not None:
+                return matched
+        return None
+
+    def _match_context_vars_by_probes(
+        self,
+        scope: ContextScope,
+        context_vars: Iterable[ContextVarDef],
+        probes: Set[str],
+    ) -> ContextBinding | None:
+        """Match context variable fields with probe tokens."""
+
+        for var in context_vars:
+            var_token = self._normalize_token(var.name)
+            if var_token in probes:
+                return ContextBinding(var_name=var.name, scope=scope)
+
+            for field in var.fields:
+                field_token = self._normalize_token(field.name)
+                if field_token in probes:
+                    return ContextBinding(var_name=var.name, scope=scope, field_name=field.name)
+
+                if any(probe and probe in field_token for probe in probes):
+                    return ContextBinding(var_name=var.name, scope=scope, field_name=field.name)
+
+        return None
 
     @staticmethod
     def _contains_any(texts: Iterable[str], probes: Iterable[str]) -> bool:
@@ -175,3 +271,7 @@ class DefaultResourceMatcher:
         if "select_one" in joined:
             return QueryMode.SELECT_ONE
         return QueryMode.SELECT
+
+    @staticmethod
+    def _normalize_token(value: str) -> str:
+        return "".join(ch for ch in (value or "").lower() if ch.isalnum())

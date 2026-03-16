@@ -60,6 +60,9 @@ class DefaultValidator:
                 )
             )
 
+        syntax_issues = self._validate_expression_shapes(generated_dsl.value_expression)
+        issues.extend(syntax_issues)
+
         rendered_text = generated_dsl.to_text().strip()
         if not rendered_text:
             issues.append(
@@ -68,11 +71,6 @@ class DefaultValidator:
                     message="Rendered DSL text is empty.",
                 )
             )
-
-        # TODO: validate context/local references against resolved environment.
-        # TODO: validate BO/query usage and namingSQL availability.
-        # TODO: validate function resolution and import requirements.
-        # TODO: add method-cycle checks once plan-level AST is threaded here.
 
         has_error = any(issue.level == "error" for issue in issues)
         return ValidationResult(syntax_valid=not has_error, semantic_valid=not has_error, issues=issues)
@@ -111,3 +109,38 @@ class DefaultValidator:
         }
 
         return {c for c in candidates if c not in known_methods}
+
+    def _validate_expression_shapes(self, expression: str) -> list[ValidationIssue]:
+        """Apply tiny shape checks for `if(...)` and binary operator usage."""
+
+        issues: list[ValidationIssue] = []
+        if not expression:
+            return issues
+
+        for inside in re.findall(r"\bif\(([^)]*)\)", expression):
+            if inside.count(",") < 2:
+                issues.append(
+                    ValidationIssue(
+                        code=ValidationErrorCode.FINAL_EXPRESSION_MISSING,
+                        message="IF expression requires 3 arguments.",
+                        location="value_expression",
+                    )
+                )
+
+        binary_ops = ("==", "!=", ">=", "<=", ">", "<")
+        for op in binary_ops:
+            if op not in expression:
+                continue
+            if re.search(rf"(^|[,(])\s*{re.escape(op)}\s*", expression) or re.search(
+                rf"{re.escape(op)}\s*([,)])", expression
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code=ValidationErrorCode.FINAL_EXPRESSION_MISSING,
+                        message="Binary expression requires both left and right operands.",
+                        location="value_expression",
+                    )
+                )
+                break
+
+        return issues

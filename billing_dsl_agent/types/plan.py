@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .bo import BODef
 from .common import ContextScope, QueryMode
@@ -65,6 +65,7 @@ class ResourceBinding:
     bo_bindings: List[BOBinding] = field(default_factory=list)
     function_bindings: List[FunctionBinding] = field(default_factory=list)
     missing_resources: List[MissingResource] = field(default_factory=list)
+    semantic_bindings: Dict[str, str] = field(default_factory=dict)
 
     @property
     def is_satisfied(self) -> bool:
