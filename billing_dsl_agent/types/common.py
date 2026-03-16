@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 class DSLDataType(str, Enum):
@@ -45,6 +45,7 @@ class TypeRef:
     kind: str
     name: str
     is_list: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -54,6 +55,7 @@ class ParameterDef:
     name: str
     type: TypeRef
     description: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
