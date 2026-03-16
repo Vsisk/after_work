@@ -8,17 +8,39 @@ from typing import Any, Dict, List, Sequence
 from billing_dsl_agent.types.intent import IntentSourceType, NodeIntent, OperationIntent
 from billing_dsl_agent.types.node import NodeDef
 
+_ZH_GLOBAL_CONTEXT = "\u5168\u5c40\u4e0a\u4e0b\u6587"
+_ZH_CURRENT = "\u5f53\u524d"
+_ZH_LOCAL_CONTEXT = "\u5c40\u90e8\u4e0a\u4e0b\u6587"
+_ZH_LOCAL_VAR = "\u5c40\u90e8\u53d8\u91cf"
+_ZH_QUERY = "\u67e5\u8be2"
+_ZH_LOOKUP = "\u67e5\u8868"
+_ZH_FORMAT = "\u683c\u5f0f\u5316"
+_ZH_IF = "\u5982\u679c"
+_ZH_ELSE = "\u5426\u5219"
+_ZH_JUDGE = "\u5224\u65ad"
+_ZH_WHEN = "\u5f53"
+_ZH_CONCAT = "\u62fc\u63a5"
+_ZH_CALC = "\u8ba1\u7b97"
+_ZH_EXPR = "\u8868\u8fbe\u5f0f"
+_ZH_TWO_DECIMAL = "\u4e24\u4f4d\u5c0f\u6570"
+_ZH_FIRST = "\u7b2c\u4e00\u6761"
+_ZH_NOT_NULL = "\u4e0d\u80fd\u4e3a\u7a7a"
+_ZH_DEFAULT = "\u9ed8\u8ba4"
+_ZH_CUSTOMER_GENDER = "\u5ba2\u6237\u6027\u522b"
+_ZH_BILL_CYCLE = "\u8d26\u671f"
+_ZH_MALE = "\u7537"
+
 
 class SimpleRequirementParser:
     """Parse requirement text into NodeIntent with lightweight keyword rules."""
 
-    _CONTEXT_KEYWORDS: Sequence[str] = ("$ctx$", "ctx", "context", "全局上下文", "当前")
-    _LOCAL_CONTEXT_KEYWORDS: Sequence[str] = ("$local$", "local", "局部上下文", "局部变量")
-    _BO_QUERY_KEYWORDS: Sequence[str] = ("select", "select_one", "查询", "查表")
+    _CONTEXT_KEYWORDS: Sequence[str] = ("$ctx$", "ctx", "context", _ZH_GLOBAL_CONTEXT, _ZH_CURRENT)
+    _LOCAL_CONTEXT_KEYWORDS: Sequence[str] = ("$local$", "local", _ZH_LOCAL_CONTEXT, _ZH_LOCAL_VAR)
+    _BO_QUERY_KEYWORDS: Sequence[str] = ("select", "select_one", _ZH_QUERY, _ZH_LOOKUP)
     _NAMING_SQL_KEYWORDS: Sequence[str] = ("fetch", "fetch_one", "naming sql", "namingsql")
-    _FUNCTION_KEYWORDS: Sequence[str] = ("if", "exists", "concat", "merge_list", "格式化", "format")
-    _CONDITIONAL_KEYWORDS: Sequence[str] = ("if", "如果", "否则", "判断", "当")
-    _EXPRESSION_KEYWORDS: Sequence[str] = ("拼接", "计算", "表达式", "format", "格式化")
+    _FUNCTION_KEYWORDS: Sequence[str] = ("if", "exists", "concat", "merge_list", _ZH_FORMAT, "format")
+    _CONDITIONAL_KEYWORDS: Sequence[str] = ("if", _ZH_IF, _ZH_ELSE, _ZH_JUDGE, _ZH_WHEN)
+    _EXPRESSION_KEYWORDS: Sequence[str] = (_ZH_CONCAT, _ZH_CALC, _ZH_EXPR, "format", _ZH_FORMAT)
 
     def parse(self, user_requirement: str, node_def: NodeDef) -> NodeIntent:
         """Parse text requirement into a stable NodeIntent using simple rules."""
@@ -72,10 +94,10 @@ class SimpleRequirementParser:
         if field_candidates:
             slots["field_hint_candidates"] = field_candidates
 
-        if "两位小数" in raw_text or "2位小数" in raw_text or "two decimal" in normalized_text:
+        if _ZH_TWO_DECIMAL in raw_text or "2\u4f4d\u5c0f\u6570" in raw_text or "two decimal" in normalized_text:
             slots["format_precision"] = 2
 
-        if "第一条" in raw_text or "first" in normalized_text:
+        if _ZH_FIRST in raw_text or "first" in normalized_text:
             slots["query_expect_first"] = True
 
         return slots
@@ -213,9 +235,9 @@ class SimpleRequirementParser:
         """Extract minimal constraints from obvious requirement hints."""
 
         constraints: List[str] = []
-        if "不能为空" in raw_text or "not null" in normalized_text:
+        if _ZH_NOT_NULL in raw_text or "not null" in normalized_text:
             constraints.append("result_must_not_be_null")
-        if "默认" in raw_text or "default" in normalized_text:
+        if _ZH_DEFAULT in raw_text or "default" in normalized_text:
             constraints.append("should_have_default_fallback")
         return constraints
 
@@ -225,7 +247,7 @@ class SimpleRequirementParser:
         quoted_literals = self._extract_quoted_literals(raw_text)
         case_matches = list(
             re.finditer(
-                r"当\s*(?P<field>[^为是=，。,]+?)\s*(?:为|是|==)\s*(?P<value>[^时，。,\s]+)\s*时",
+                rf"{_ZH_WHEN}\s*(?P<field>[^为时，。,]+?)\s*为\s*(?P<value>[^时，。,\s]+)\s*时",
                 raw_text,
             )
         )
@@ -263,9 +285,20 @@ class SimpleRequirementParser:
             }
 
         match_if_else = re.search(
-            r"(?:如果|if)\s*(?P<field>[^，。,]+?)\s*(?:为|是|==)\s*(?P<value>[^，。,\s]+).*?(?:则|then)?\s*(?:返回|显示)?\s*(?P<t>[“”\"'‘’]?[^，。]+?[“”\"'‘’]?)\s*(?:，|,)?\s*(?:否则|else)\s*(?:返回|显示)?\s*(?P<f>[“”\"'‘’]?[^，。]+?[“”\"'‘’]?)",
+            rf"""(?:{_ZH_IF}|if)\s*
+            (?P<field>[^，。,:]+?)\s*
+            (?:为|是|==)\s*
+            (?P<value>[^，。,\s]+)
+            .*?
+            (?:then|\u663e\u793a|\u8fd4\u56de)?\s*
+            (?P<t>["'][^"']+["'])
+            .*?
+            (?:{_ZH_ELSE}|else)\s*
+            (?:\u663e\u793a|\u8fd4\u56de)?\s*
+            (?P<f>["'][^"']+["'])
+            """,
             raw_text,
-            flags=re.IGNORECASE,
+            flags=re.IGNORECASE | re.VERBOSE,
         )
         if match_if_else:
             t_val = quoted_literals[0] if len(quoted_literals) > 0 else self._clean_literal(match_if_else.group("t"))
@@ -285,7 +318,7 @@ class SimpleRequirementParser:
     def _extract_quoted_literals(text: str) -> List[str]:
         """Extract all quoted string literals from requirement text."""
 
-        matches = re.findall(r"[“”\"'‘’]([^“”\"'‘’]+)[“”\"'‘’]", text or "")
+        matches = re.findall(r"""["']([^"']+)["']""", text or "")
         return [item.strip() for item in matches if item.strip()]
 
     @staticmethod
@@ -293,7 +326,7 @@ class SimpleRequirementParser:
         """Extract rough field-hint candidates from dot-path and key phrases."""
 
         hints = [m.group(0) for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*", text or "")]
-        for probe in ("客户性别", "gender", "sex", "账期", "regionId", "be_id"):
+        for probe in (_ZH_CUSTOMER_GENDER, "gender", "sex", _ZH_BILL_CYCLE, "regionId", "be_id"):
             if probe in text:
                 hints.append(probe)
         return list(dict.fromkeys(hints))
@@ -302,7 +335,7 @@ class SimpleRequirementParser:
     def _clean_literal(value: str) -> str:
         """Trim wrapping quotes and spaces from extracted literal value."""
 
-        return (value or "").strip().strip("“”\"'‘’")
+        return (value or "").strip().strip("\"' ")
 
     @staticmethod
     def _contains_any(raw_text: str, normalized_text: str, probes: Sequence[str]) -> bool:

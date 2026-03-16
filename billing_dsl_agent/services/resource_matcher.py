@@ -21,15 +21,21 @@ from billing_dsl_agent.types.plan import (
     ResourceBinding,
 )
 
+_ZH_CUSTOMER_GENDER = "\u5ba2\u6237\u6027\u522b"
+_ZH_BILL_CYCLE = "\u8d26\u671f"
+_ZH_CONTEXT = "\u4e0a\u4e0b\u6587"
+_ZH_LOCAL = "\u5c40\u90e8"
+_ZH_FUNCTION = "\u51fd\u6570"
+
 
 class DefaultResourceMatcher:
     """Minimal but working matcher using string-based heuristic matching."""
 
     _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-        "客户性别": ("gender", "sex", "customergender", "custsex"),
+        _ZH_CUSTOMER_GENDER: ("gender", "sex", "customergender", "custsex"),
         "gender": ("gender", "sex", "customergender", "custsex"),
         "sex": ("sex", "gender", "custsex"),
-        "账期": ("billcycle", "cycle", "iirrbillcycle"),
+        _ZH_BILL_CYCLE: ("billcycle", "cycle", "iirrbillcycle"),
     }
 
     def match(self, intent: NodeIntent, env: ResolvedEnvironment) -> ResourceBinding:
@@ -60,7 +66,7 @@ class DefaultResourceMatcher:
         op_texts = [op.description for op in intent.operations]
         search_texts = [requirement, *op_texts]
 
-        if wants_context or self._contains_any(search_texts, ["$ctx$", "context", "上下文"]):
+        if wants_context or self._contains_any(search_texts, ["$ctx$", "context", _ZH_CONTEXT]):
             matched = self._match_context_bindings(search_texts, global_index.by_path.keys())
             for name in matched:
                 var = global_index.by_path[name]
@@ -79,7 +85,7 @@ class DefaultResourceMatcher:
                     )
                 )
 
-        if wants_local or self._contains_any(search_texts, ["$local$", "local", "局部"]):
+        if wants_local or self._contains_any(search_texts, ["$local$", "local", _ZH_LOCAL]):
             matched = self._match_context_bindings(search_texts, local_index.by_path.keys())
             for name in matched:
                 var = local_index.by_path[name]
@@ -124,7 +130,7 @@ class DefaultResourceMatcher:
                     )
                 )
 
-        if wants_fn or self._contains_any(search_texts, ["(", "函数", "function", "if", "exists"]):
+        if wants_fn or self._contains_any(search_texts, ["(", _ZH_FUNCTION, "function", "if", "exists"]):
             matched_full = self._match_names(search_texts, function_index.by_full_name.keys())
             for full_name in matched_full:
                 fn = function_index.by_full_name[full_name]
