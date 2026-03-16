@@ -6,6 +6,8 @@ from .explanation_builder import DefaultExplanationBuilder
 from .orchestrator import CodeAgentOrchestrator
 from .resource_index import BOIndex, ContextIndex, FunctionIndex, build_bo_index, build_context_path_index, build_function_index
 from .resource_matcher import DefaultResourceMatcher
+from .simple_requirement_parser import SimpleRequirementParser
+from .simple_value_planner import SimpleValuePlanner
 from .validator import DefaultValidator
 
 __all__ = [
@@ -14,6 +16,8 @@ __all__ = [
     "DefaultExplanationBuilder",
     "DefaultResourceMatcher",
     "DefaultValidator",
+    "SimpleRequirementParser",
+    "SimpleValuePlanner",
     "CodeAgentOrchestrator",
     "ContextIndex",
     "BOIndex",

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from billing_dsl_agent.types.common import GeneratedDSL, MethodDef
-from billing_dsl_agent.types.dsl import ExprKind, ExprNode, MethodPlan, ValuePlan
+from billing_dsl_agent.types.dsl import ExprKind, ExprNode, ValuePlan
 
 
 class DefaultDSLRenderer:
     """Render ValuePlan AST/IR nodes into DSL text."""
 
     def render(self, plan: ValuePlan) -> GeneratedDSL:
-        methods = [MethodDef(name=m.name, body=self._render_expr(m.expr)) for m in plan.methods]
+        methods = [MethodDef(name=method.name, body=self._render_expr(method.expr)) for method in plan.methods]
         final_expr_text = self._render_expr(plan.final_expr) if plan.final_expr else ""
         return GeneratedDSL(methods=methods, value_expression=final_expr_text)
 
@@ -31,20 +31,18 @@ class DefaultDSLRenderer:
             return str(node.value)
 
         if node.kind == ExprKind.FIELD_ACCESS:
-            base = self._render_expr(node.children[0]) if node.children else ""
-            return f"{base}.{node.value}" if base else str(node.value)
+            parent = self._render_expr(node.children[0]) if node.children else ""
+            return f"{parent}.{node.value}" if parent else str(node.value)
 
         if node.kind == ExprKind.FUNCTION_CALL:
-            args = ", ".join(self._render_expr(child) for child in node.children)
+            args = self._render_args(node.children)
             return f"{node.value}({args})"
 
         if node.kind == ExprKind.QUERY_CALL:
-            query_mode = str(node.metadata.get("query_mode", "select"))
+            query_mode = self._normalize_query_mode(node.metadata.get("query_mode", "select"))
             target = str(node.metadata.get("target", ""))
-            args = ", ".join(self._render_expr(child) for child in node.children)
-            if args:
-                return f"{query_mode}({target}, {args})"
-            return f"{query_mode}({target})"
+            args = self._render_args(node.children)
+            return f"{query_mode}({target}, {args})" if args else f"{query_mode}({target})"
 
         if node.kind == ExprKind.BINARY_OP:
             left = self._render_expr(node.children[0]) if len(node.children) > 0 else ""
@@ -59,15 +57,23 @@ class DefaultDSLRenderer:
             return f"if({cond}, {when_true}, {when_false})"
 
         if node.kind == ExprKind.LIST_LITERAL:
-            items = ", ".join(self._render_expr(child) for child in node.children)
-            return f"[{items}]"
+            return f"[{self._render_args(node.children)}]"
 
         if node.kind == ExprKind.INDEX_ACCESS:
-            target = self._render_expr(node.children[0]) if len(node.children) > 0 else ""
+            obj = self._render_expr(node.children[0]) if len(node.children) > 0 else ""
             index = self._render_expr(node.children[1]) if len(node.children) > 1 else self._render_literal(node.value)
-            return f"{target}[{index}]"
+            return f"{obj}[{index}]"
 
         return str(node.value) if node.value is not None else ""
+
+    def _render_args(self, children: list[ExprNode]) -> str:
+        return ", ".join(self._render_expr(child) for child in children)
+
+    @staticmethod
+    def _normalize_query_mode(value: object) -> str:
+        raw = str(value or "select").lower()
+        supported = {"select", "select_one", "fetch", "fetch_one"}
+        return raw if raw in supported else "select"
 
     @staticmethod
     def _render_literal(value: object) -> str:

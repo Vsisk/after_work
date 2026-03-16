@@ -31,3 +31,32 @@ def test_render_method_and_final_expression() -> None:
     assert result.methods[0].body == "1 + 2"
     assert result.value_expression == "Common.Double2Str(funcA, 2)"
     assert result.to_text() == "def funcA: 1 + 2\nCommon.Double2Str(funcA, 2)"
+
+
+def test_render_query_field_access_and_if_expr() -> None:
+    renderer = DefaultDSLRenderer()
+    query = ExprNode(
+        kind=ExprKind.QUERY_CALL,
+        metadata={"query_mode": "select_one", "target": "SYS_BE"},
+        children=[
+            ExprNode(kind=ExprKind.LITERAL, value=True),
+            ExprNode(kind=ExprKind.LITERAL, value=1),
+        ],
+    )
+    plan = ValuePlan(
+        target_node_path="/bill/region",
+        final_expr=ExprNode(
+            kind=ExprKind.IF_EXPR,
+            children=[
+                ExprNode(kind=ExprKind.FUNCTION_CALL, value="exists", children=[query]),
+                ExprNode(kind=ExprKind.FIELD_ACCESS, value="regionId", children=[query]),
+                ExprNode(kind=ExprKind.LITERAL, value=0),
+            ],
+        ),
+    )
+
+    result = renderer.render(plan)
+
+    assert "select_one(SYS_BE, true, 1)" in result.value_expression
+    assert ".regionId" in result.value_expression
+    assert result.value_expression.startswith("if(")

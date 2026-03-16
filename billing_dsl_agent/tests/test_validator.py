@@ -32,3 +32,16 @@ def test_validator_reports_duplicate_method_name() -> None:
 
     assert result.is_valid is False
     assert any(issue.code == ValidationErrorCode.DUPLICATE_METHOD_NAME for issue in result.issues)
+
+
+def test_validator_reports_unknown_method_ref() -> None:
+    validator = DefaultValidator()
+    generated = GeneratedDSL(
+        methods=[MethodDef(name="funcA", body="1")],
+        value_expression="funcB",
+    )
+
+    result = validator.validate(generated, _dummy_request(), ResolvedEnvironment())
+
+    assert result.is_valid is False
+    assert any(issue.code == ValidationErrorCode.UNKNOWN_METHOD_REF for issue in result.issues)
