@@ -44,6 +44,8 @@ class ContextPropertyDef:
     allow_modify: bool = False
     nullable: bool = True
     cdsl: str = ""
+    expression: str = ""
+    value_source_type: str = ""
     children: List["ContextPropertyDef"] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
