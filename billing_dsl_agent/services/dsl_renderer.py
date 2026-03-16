@@ -22,10 +22,12 @@ class DefaultDSLRenderer:
             return self._render_literal(node.value)
 
         if node.kind == ExprKind.CONTEXT_REF:
-            return f"$ctx$.{node.value}"
+            value = str(node.value or "")
+            return value if value.startswith("$ctx$.") else f"$ctx$.{value}"
 
         if node.kind == ExprKind.LOCAL_REF:
-            return f"$local$.{node.value}"
+            value = str(node.value or "")
+            return value if value.startswith("$local$.") else f"$local$.{value}"
 
         if node.kind == ExprKind.METHOD_REF:
             return str(node.value)

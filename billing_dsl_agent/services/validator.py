@@ -90,8 +90,9 @@ class DefaultValidator:
         if not expression:
             return set()
 
-        # Remove context references and field accesses to reduce false positives.
-        sanitized = expression.replace("$ctx$.", "").replace("$local$.", "")
+        # Remove context/local references and field accesses to reduce false positives.
+        sanitized = re.sub(r"\$ctx\$\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", " ", expression)
+        sanitized = re.sub(r"\$local\$\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", " ", sanitized)
         sanitized = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', " ", sanitized)
         sanitized = re.sub(r"\b\d+(?:\.\d+)?\b", " ", sanitized)
         sanitized = re.sub(r"\.[A-Za-z_][A-Za-z0-9_]*", " ", sanitized)
