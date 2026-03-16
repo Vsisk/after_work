@@ -3,7 +3,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+class DataType(str, Enum):
+    """Supported function schema data-type kinds."""
+
+    BO = "bo"
+    LOGIC = "logic"
+    BASIC = "basic"
+    EXTATTR = "extattr"
+
+
+class ExpressionType(str, Enum):
+    """Supported expression payload kinds for custom function content."""
+
+    EDSL_EXPRESSION = "edsl_expression"
+    CDSL = "cdsl"
+
+
+class FuncScope(str, Enum):
+    """Supported function scopes in function schema."""
+
+    GLOBAL = "global"
+    CUSTOM = "custom"
 
 
 @dataclass(slots=True)
@@ -13,6 +37,7 @@ class FunctionTypeRef:
     kind: str
     name: str
     is_list: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -23,6 +48,7 @@ class FunctionParamDef:
     type: FunctionTypeRef
     description: str = ""
     required: bool = True
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
