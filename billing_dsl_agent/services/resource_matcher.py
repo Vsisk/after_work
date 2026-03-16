@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Iterable, Set
 
 from billing_dsl_agent.services.resource_index import (
-    build_bo_index,
-    build_context_path_index,
+    build_bo_index_from_list,
+    build_context_index_from_vars,
     build_function_index,
 )
 from billing_dsl_agent.types.common import ContextScope, QueryMode
@@ -27,9 +27,9 @@ class DefaultResourceMatcher:
     def match(self, intent: NodeIntent, env: ResolvedEnvironment) -> ResourceBinding:
         requirement = (intent.raw_requirement or "").strip()
 
-        global_index = build_context_path_index(env.global_context_vars)
-        local_index = build_context_path_index(env.local_context_vars)
-        bo_index = build_bo_index(env.available_bos)
+        global_index = build_context_index_from_vars(env.global_context_vars)
+        local_index = build_context_index_from_vars(env.local_context_vars)
+        bo_index = build_bo_index_from_list(env.available_bos)
         function_index = build_function_index(env.available_functions)
 
         context_bindings: list[ContextBinding] = []
