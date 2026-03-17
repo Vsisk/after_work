@@ -17,6 +17,85 @@
 
 `GenerateDSLRequest -> NodeIntent -> ResolvedEnvironment -> ResourceBinding -> ValuePlan -> GeneratedDSL -> ValidationResult -> GenerateDSLResponse`
 
+## 模块分层图
+
+```mermaid
+flowchart TB
+    subgraph L1["入口层"]
+        Caller["Caller / Integrator"]
+        Service["GenerateDSLAgentService"]
+    end
+
+    subgraph L2["编排层"]
+        Orch["CodeAgentOrchestrator"]
+    end
+
+    subgraph L3["理解与资源层"]
+        LLMParser["LLMRequirementParser"]
+        Parser["SimpleRequirementParser"]
+        Resolver["DefaultEnvironmentResolver"]
+        Matcher["DefaultResourceMatcher"]
+        Assembler["PromptAssembler"]
+        Client["OpenAIClientAdapter"]
+    end
+
+    subgraph L4["规划与生成层"]
+        Planner["SimpleValuePlanner"]
+        Renderer["DefaultDSLRenderer"]
+        Validator["DefaultValidator"]
+        Explainer["DefaultExplanationBuilder"]
+    end
+
+    subgraph L5["类型与协议层"]
+        Types["types/* dataclasses and enums"]
+        Protocols["protocols/* interfaces"]
+    end
+
+    subgraph L6["配套能力"]
+        Normalize["normalize/*"]
+        ResourceIndex["resource_index.py"]
+        Tests["tests/*"]
+    end
+
+    Caller --> Service
+    Service --> Orch
+    Service -. optional .-> LLMParser
+    LLMParser --> Assembler
+    LLMParser --> Client
+    LLMParser --> Parser
+    Orch --> Parser
+    Orch --> Resolver
+    Orch --> Matcher
+    Orch --> Planner
+    Orch --> Renderer
+    Orch --> Validator
+    Orch --> Explainer
+
+    Service --> Types
+    Orch --> Protocols
+    Parser --> Types
+    Resolver --> Types
+    Matcher --> Types
+    Planner --> Types
+    Renderer --> Types
+    Validator --> Types
+    Explainer --> Types
+
+    Normalize -. supports model normalization .-> Types
+    ResourceIndex -. auxiliary lookup helpers .-> Types
+    Tests -. verify all layers .-> Service
+    Tests -. verify all layers .-> Orch
+```
+
+这张图强调的是模块边界，而不是单次调用顺序：
+
+- `GenerateDSLAgentService` 是最外层入口，负责决定是否启用 LLM 解析。
+- `CodeAgentOrchestrator` 是核心编排器，负责串起后续各阶段。
+- `services/*` 中的大多数实现都依赖 `types/*` 里的 dataclass 和 enum。
+- `protocols/*` 提供的是编排依赖的抽象边界，便于替换实现。
+- `normalize/*` 和 `resource_index.py` 属于配套能力，当前不是主链路必经步骤。
+- `tests/*` 覆盖入口层和编排层，也验证若干阶段实现。
+
 ## 类关系图
 
 ```mermaid
@@ -339,4 +418,3 @@ flowchart LR
 - 语义对象：[`billing_dsl_agent/types/intent.py`](/D:/workspace/after_work/billing_dsl_agent/types/intent.py)
 - 绑定对象：[`billing_dsl_agent/types/plan.py`](/D:/workspace/after_work/billing_dsl_agent/types/plan.py)
 - 规划对象：[`billing_dsl_agent/types/dsl.py`](/D:/workspace/after_work/billing_dsl_agent/types/dsl.py)
-
