@@ -3,7 +3,11 @@
 from .dsl_renderer import DefaultDSLRenderer
 from .environment_resolver import DefaultEnvironmentResolver
 from .explanation_builder import DefaultExplanationBuilder
+from .generate_dsl_agent_service import GenerateDSLAgentService
+from .llm_requirement_parser import LLMRequirementParser
+from .openai_client_adapter import OpenAIClientAdapter, StubOpenAIClientAdapter
 from .orchestrator import CodeAgentOrchestrator
+from .prompt_assembler import PromptAssembler
 from .resource_index import (
     BOIndex,
     ContextIndex,
@@ -31,6 +35,11 @@ __all__ = [
     "DefaultDSLRenderer",
     "DefaultEnvironmentResolver",
     "DefaultExplanationBuilder",
+    "GenerateDSLAgentService",
+    "PromptAssembler",
+    "OpenAIClientAdapter",
+    "StubOpenAIClientAdapter",
+    "LLMRequirementParser",
     "DefaultResourceMatcher",
     "DefaultValidator",
     "SimpleRequirementParser",

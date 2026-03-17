@@ -30,11 +30,12 @@ class DefaultDSLRenderer:
             return value if value.startswith("$local$.") else f"$local$.{value}"
 
         if node.kind == ExprKind.METHOD_REF:
-            return str(node.value)
+            return str(node.value or "")
 
         if node.kind == ExprKind.FIELD_ACCESS:
             parent = self._render_expr(node.children[0]) if node.children else ""
-            return f"{parent}.{node.value}" if parent else str(node.value)
+            field_name = str(node.value or "")
+            return f"{parent}.{field_name}" if parent else field_name
 
         if node.kind == ExprKind.FUNCTION_CALL:
             args = self._render_args(node.children)
@@ -42,7 +43,7 @@ class DefaultDSLRenderer:
 
         if node.kind == ExprKind.QUERY_CALL:
             query_mode = self._normalize_query_mode(node.metadata.get("query_mode", "select"))
-            target = str(node.metadata.get("target", ""))
+            target = str(node.metadata.get("target", node.value or ""))
             args = self._render_args(node.children)
             return f"{query_mode}({target}, {args})" if args else f"{query_mode}({target})"
 
