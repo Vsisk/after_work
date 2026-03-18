@@ -1,4 +1,4 @@
-"""Mockable OpenAI client adapter for future Responses API integration."""
+"""Mockable OpenAI client adapter for future structured planning integration."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from billing_dsl_agent.types.agent import PlanDraft
 
 
 class OpenAIClientAdapter(Protocol):
-    """Protocol for future OpenAI-backed structured planning calls."""
+    """Protocol for future structured-output planning calls."""
 
     def create_plan_draft(self, payload: Dict[str, Any]) -> Optional[PlanDraft]:
-        """Return a structured plan draft for one assembled prompt payload."""
+        """Return one structured plan draft compatible with PlanDraft."""
 
 
 @dataclass(slots=True)

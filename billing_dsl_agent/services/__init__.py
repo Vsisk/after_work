@@ -4,9 +4,11 @@ from .dsl_renderer import DefaultDSLRenderer
 from .environment_resolver import DefaultEnvironmentResolver
 from .explanation_builder import DefaultExplanationBuilder
 from .generate_dsl_agent_service import GenerateDSLAgentService
+from .llm_planner import LLMPlanner
 from .llm_requirement_parser import LLMRequirementParser
 from .openai_client_adapter import OpenAIClientAdapter, StubOpenAIClientAdapter
 from .orchestrator import CodeAgentOrchestrator
+from .plan_validator import PlanValidator
 from .prompt_assembler import PromptAssembler
 from .resource_index import (
     BOIndex,
@@ -39,6 +41,8 @@ __all__ = [
     "PromptAssembler",
     "OpenAIClientAdapter",
     "StubOpenAIClientAdapter",
+    "LLMPlanner",
+    "PlanValidator",
     "LLMRequirementParser",
     "DefaultResourceMatcher",
     "DefaultValidator",

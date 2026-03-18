@@ -3,30 +3,52 @@ from billing_dsl_agent.services import (
     DefaultDSLRenderer,
     DefaultEnvironmentResolver,
     DefaultExplanationBuilder,
-    DefaultResourceMatcher,
     DefaultValidator,
+    LLMPlanner,
+    PlanValidator,
+    PromptAssembler,
     SimpleRequirementParser,
     SimpleValuePlanner,
 )
+from billing_dsl_agent.services.openai_client_adapter import StubOpenAIClientAdapter
+from billing_dsl_agent.types.agent import PlanDraft
 from billing_dsl_agent.types.common import ContextScope, DSLDataType
 from billing_dsl_agent.types.context import ContextFieldDef, ContextVarDef
 from billing_dsl_agent.types.node import NodeDef
 from billing_dsl_agent.types.request_response import GenerateDSLRequest
 
 _REQ = (
-    "\u5bf9\u5ba2\u6237\u79f0\u8c13\u8282\u70b9\uff1a"
-    "\u5f53\u5ba2\u6237\u6027\u522b\u4e3a\u7537\u65f6\uff0c\u663e\u793a\"MR.\"\uff0c"
-    "\u5f53\u5ba2\u6237\u6027\u522b\u4e3a\u5973\u65f6\uff0c\u663e\u793a\"Ms.\""
+    "对客户称谓节点："
+    '当客户性别为男时，显示"MR."，'
+    '当客户性别为女时，显示"Ms."'
 )
-_NODE_DESC = "\u5ba2\u6237\u79f0\u8c13\u8282\u70b9"
-_MALE = "\u7537"
+_NODE_DESC = "客户称谓节点"
+_MALE = "男"
 
 
 def _build_orchestrator() -> CodeAgentOrchestrator:
     return CodeAgentOrchestrator(
-        parser=SimpleRequirementParser(),
+        llm_planner=LLMPlanner(
+            prompt_assembler=PromptAssembler(),
+            client=StubOpenAIClientAdapter(
+                draft=PlanDraft(
+                    intent_summary="title by gender",
+                    context_refs=["$ctx$.customer.gender"],
+                    semantic_slots={
+                        "condition_ref": "$ctx$.customer.gender",
+                        "condition_operator": "==",
+                        "condition_value": _MALE,
+                        "true_output": "MR.",
+                        "false_output": "Ms.",
+                    },
+                    expression_pattern="if(condition, true, false)",
+                    raw_plan={"target_node_path": "invoice.customer.title"},
+                )
+            ),
+            fallback_parser=SimpleRequirementParser(),
+        ),
         environment_resolver=DefaultEnvironmentResolver(),
-        resource_matcher=DefaultResourceMatcher(),
+        plan_validator=PlanValidator(),
         value_planner=SimpleValuePlanner(),
         dsl_renderer=DefaultDSLRenderer(),
         validator=DefaultValidator(),
@@ -71,8 +93,7 @@ def test_e2e_conditional_mapping_title_by_gender() -> None:
     assert response.dsl_code.strip() != ""
     assert response.generated_dsl is not None
     assert response.validation_result is not None
-    if hasattr(response.validation_result, "is_valid"):
-        assert response.validation_result.is_valid is True
+    assert response.validation_result.is_valid is True
 
     dsl_text = response.dsl_code
     assert "if(" in dsl_text
@@ -91,7 +112,6 @@ def test_e2e_conditional_mapping_ast_shape() -> None:
     assert response.value_plan.final_expr is not None
 
     final_expr = response.value_plan.final_expr
-    assert hasattr(final_expr, "kind")
     assert str(final_expr.kind).lower().endswith("if_expr")
     assert len(final_expr.children) == 3
 

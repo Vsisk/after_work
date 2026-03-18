@@ -1,6 +1,6 @@
 # after-work
 
-这个仓库当前的核心内容是一个 Billing DSL generation agent。它接收用户需求、节点定义和可用资源，输出 DSL 代码以及整条推理链路中的关键中间对象。
+这个仓库当前的核心内容是一个 Billing DSL generation agent。当前主链路已经收缩为“LLM Planning + 本地校验 + DSL 落地”结构：LLM 负责提出资源使用方案，本地系统负责验证方案、生成 AST、渲染 DSL 并做最终校验。
 
 ## 架构入口
 
@@ -22,17 +22,17 @@ flowchart TB
         Orch["CodeAgentOrchestrator"]
     end
 
-    subgraph L3["理解与资源层"]
-        LLMParser["LLMRequirementParser"]
-        Parser["SimpleRequirementParser"]
+    subgraph L3["Planning 与校验层"]
+        Planner["LLMPlanner"]
+        PlanValidator["PlanValidator"]
+        ParserFallback["SimpleRequirementParser (fallback)"]
         Resolver["DefaultEnvironmentResolver"]
-        Matcher["DefaultResourceMatcher"]
         Assembler["PromptAssembler"]
         Client["OpenAIClientAdapter"]
     end
 
     subgraph L4["规划与生成层"]
-        Planner["SimpleValuePlanner"]
+        ValuePlanner["SimpleValuePlanner"]
         Renderer["DefaultDSLRenderer"]
         Validator["DefaultValidator"]
         Explainer["DefaultExplanationBuilder"]
@@ -51,30 +51,31 @@ flowchart TB
 
     Caller --> Service
     Service --> Orch
-    Service -. optional .-> LLMParser
-    LLMParser --> Assembler
-    LLMParser --> Client
-    LLMParser --> Parser
-    Orch --> Parser
     Orch --> Resolver
-    Orch --> Matcher
     Orch --> Planner
+    Planner --> Assembler
+    Planner --> Client
+    Planner -. fallback .-> ParserFallback
+    Orch --> PlanValidator
+    Orch --> ValuePlanner
     Orch --> Renderer
     Orch --> Validator
     Orch --> Explainer
+    Orch -. debug only .-> ResourceIndex
 
     Service --> Types
     Orch --> Protocols
-    Parser --> Types
-    Resolver --> Types
-    Matcher --> Types
     Planner --> Types
+    PlanValidator --> Types
+    ParserFallback --> Types
+    Resolver --> Types
+    ValuePlanner --> Types
     Renderer --> Types
     Validator --> Types
     Explainer --> Types
 
     Normalize -. supports model normalization .-> Types
-    ResourceIndex -. auxiliary lookup helpers .-> Types
+    ResourceIndex -. auxiliary lookup helpers / debug .-> Types
     Tests -. verify all layers .-> Service
     Tests -. verify all layers .-> Orch
 ```
@@ -83,12 +84,13 @@ flowchart TB
 
 主链路围绕以下对象展开：
 
-`GenerateDSLRequest -> NodeIntent -> ResolvedEnvironment -> ResourceBinding -> ValuePlan -> GeneratedDSL -> ValidationResult -> GenerateDSLResponse`
+`GenerateDSLRequest -> ResolvedEnvironment -> PlanDraft -> ValidationResult(plan) -> ValuePlan -> GeneratedDSL -> ValidationResult(dsl) -> GenerateDSLResponse`
 
 其中：
 
-- `GenerateDSLAgentService` 决定是否先走 LLM 需求理解。
-- `CodeAgentOrchestrator` 负责执行主 pipeline。
-- 后半段生成链路固定为 `resolve -> match -> plan -> render -> validate -> explain`。
+- `LLMPlanner` 生成结构化 `PlanDraft`。
+- `PlanValidator` 校验显式资源引用，而不是用本地规则猜资源。
+- `SimpleRequirementParser` 只保留为 fallback。
+- 后半段生成链路固定为 `plan validate -> value plan -> render -> validate -> explain`。
 
-更详细的类关系图、时序图和 LLM 分支说明见 [`AGENT_ARCHITECTURE.md`](/D:/workspace/after_work/AGENT_ARCHITECTURE.md)。
+更详细的类关系图、时序图和 fallback 分支说明见 [`AGENT_ARCHITECTURE.md`](/D:/workspace/after_work/AGENT_ARCHITECTURE.md)。
