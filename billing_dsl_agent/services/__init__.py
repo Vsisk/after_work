@@ -2,6 +2,7 @@
 
 from .dsl_renderer import DefaultDSLRenderer
 from .environment_resolver import DefaultEnvironmentResolver
+from .external_resource_loader import load_bo, load_context, load_function
 from .explanation_builder import DefaultExplanationBuilder
 from .generate_dsl_agent_service import GenerateDSLAgentService
 from .llm_planner import LLMPlanner
@@ -64,5 +65,7 @@ __all__ = [
     "build_function_full_name_index",
     "build_function_method_name_index",
     "build_function_index",
-    "build_resource_indexes_from_request",
+    "load_context",
+    "load_bo",
+    "load_function",
 ]

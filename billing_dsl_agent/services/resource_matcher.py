@@ -39,66 +39,40 @@ class DefaultResourceMatcher:
         "amount": ("amount", "amt", "money"),
     }
 
-    def match(self, intent: NodeIntent, env: ResolvedEnvironment) -> ResourceBinding:
-        """Match resources from resolved environment against intent semantic slots."""
-
         context_bindings: list[ContextBinding] = []
         bo_bindings: list[BOBinding] = []
         function_bindings: list[FunctionBinding] = []
         missing_resources: list[MissingResource] = []
         semantic_bindings: dict[str, str] = {}
 
-        self._bind_context_hints(
-            intent=intent,
-            env=env,
-            context_bindings=context_bindings,
-            semantic_bindings=semantic_bindings,
-            missing_resources=missing_resources,
-        )
-        self._bind_bo_query(
-            intent=intent,
-            env=env,
-            bo_bindings=bo_bindings,
-            semantic_bindings=semantic_bindings,
-            missing_resources=missing_resources,
-        )
-        self._bind_function(
-            intent=intent,
-            env=env,
-            function_bindings=function_bindings,
-            semantic_bindings=semantic_bindings,
-            missing_resources=missing_resources,
-        )
+        context_seen: Set[tuple[str, ContextScope, str | None]] = set()
+        bo_seen: Set[tuple[str, QueryMode, str | None]] = set()
+        function_seen: Set[tuple[str, str]] = set()
 
-        return ResourceBinding(
-            context_bindings=self._dedup_context_bindings(context_bindings),
-            bo_bindings=self._dedup_bo_bindings(bo_bindings),
-            function_bindings=self._dedup_function_bindings(function_bindings),
-            missing_resources=self._dedup_missing_resources(missing_resources),
-            semantic_bindings=semantic_bindings,
-        )
+        wants_context = IntentSourceType.CONTEXT in intent.source_types
+        wants_local = IntentSourceType.LOCAL_CONTEXT in intent.source_types
+        wants_bo = IntentSourceType.BO_QUERY in intent.source_types or IntentSourceType.NAMING_SQL in intent.source_types
+        wants_fn = IntentSourceType.FUNCTION in intent.source_types
 
-    def _bind_context_hints(
-        self,
-        intent: NodeIntent,
-        env: ResolvedEnvironment,
-        context_bindings: list[ContextBinding],
-        semantic_bindings: dict[str, str],
-        missing_resources: list[MissingResource],
-    ) -> None:
-        slots = intent.semantic_slots or {}
-        raw_hints = list(slots.get("context_field_hints") or [])
-        condition_hint = slots.get("condition_field_hint")
-        if condition_hint:
-            raw_hints.append(condition_hint)
+        op_texts = [op.description for op in intent.operations]
+        search_texts = [requirement, *op_texts]
+        context_keyword_hit = self._contains_any(search_texts, ["$ctx$", "context", "上下文"])
+        local_keyword_hit = self._contains_any(search_texts, ["$local$", "local", "局部"])
+        bo_keyword_hit = self._contains_any(search_texts, ["select", "fetch", "bo"])
+        fn_keyword_hit = self._contains_any(search_texts, ["(", "函数", "function", "if", "exists"])
 
-        uses_local = IntentSourceType.LOCAL_CONTEXT in intent.source_types
-        if uses_local:
-            semantic_bindings["preferred_context_scope"] = ContextScope.LOCAL.value
-
-        for hint in self._dedup_strings(raw_hints):
-            binding = self._match_context_hint(hint, env, prefer_local=uses_local)
-            if binding is None:
+        if wants_context or context_keyword_hit:
+            global_index = build_context_path_index(env.global_context_vars)
+            matched = self._match_context_bindings(search_texts, global_index.by_path.keys())
+            for name in matched:
+                var = global_index.by_path[name]
+                key = (var.name, ContextScope.GLOBAL, self._field_name_from_path(name, var.name))
+                if key not in context_seen:
+                    context_seen.add(key)
+                    context_bindings.append(
+                        ContextBinding(var_name=var.name, scope=ContextScope.GLOBAL, field_name=key[2])
+                    )
+            if wants_context and not matched:
                 missing_resources.append(
                     self._build_missing_resource(
                         resource_type="context",
@@ -108,41 +82,38 @@ class DefaultResourceMatcher:
                 )
                 continue
 
-            context_bindings.append(binding)
-            semantic_key = "condition_field" if hint == condition_hint else f"context:{hint}"
-            semantic_bindings[semantic_key] = self._binding_to_path(binding)
-
-    def _bind_bo_query(
-        self,
-        intent: NodeIntent,
-        env: ResolvedEnvironment,
-        bo_bindings: list[BOBinding],
-        semantic_bindings: dict[str, str],
-        missing_resources: list[MissingResource],
-    ) -> None:
-        slots = intent.semantic_slots or {}
-        bo_name = str(slots.get("bo_name") or slots.get("naming_sql_name") or "").strip()
-        target_field = str(slots.get("target_field") or "").strip()
-        query_mode = self._infer_query_mode(slots)
-
-        if IntentSourceType.BO_QUERY not in intent.source_types and not bo_name:
-            return
-
-        bo = self._match_bo_name(bo_name, env.available_bos)
-        if bo is None:
-            missing_resources.append(
-                self._build_missing_resource(
-                    resource_type="bo",
-                    resource_name=bo_name or "bo_query_target",
-                    reason="No matched BO name from semantic slots.",
+        if wants_local or local_keyword_hit:
+            local_index = build_context_path_index(env.local_context_vars)
+            matched = self._match_context_bindings(search_texts, local_index.by_path.keys())
+            for name in matched:
+                var = local_index.by_path[name]
+                key = (var.name, ContextScope.LOCAL, self._field_name_from_path(name, var.name))
+                if key not in context_seen:
+                    context_seen.add(key)
+                    context_bindings.append(
+                        ContextBinding(var_name=var.name, scope=ContextScope.LOCAL, field_name=key[2])
+                    )
+            if wants_local and not matched:
+                missing_resources.append(
+                    MissingResource(
+                        resource_type="local_context",
+                        resource_name="local_context",
+                        reason="No matched local context variable in requirement/operations.",
+                    )
                 )
             )
             return
 
-        selected_field_names: list[str] = []
-        if target_field:
-            matched_field = self._match_bo_field(bo, target_field)
-            if matched_field is None:
+        if wants_bo or bo_keyword_hit:
+            bo_index = build_bo_index(env.available_bos)
+            matched_bo_names = self._match_names(search_texts, bo_index.by_name.keys())
+            inferred_mode = self._infer_query_mode(search_texts)
+            for bo_name in matched_bo_names:
+                key = (bo_name, inferred_mode, None)
+                if key not in bo_seen:
+                    bo_seen.add(key)
+                    bo_bindings.append(BOBinding(bo_name=bo_name, query_mode=inferred_mode))
+            if wants_bo and not matched_bo_names:
                 missing_resources.append(
                     self._build_missing_resource(
                         resource_type="bo_field",
@@ -154,37 +125,31 @@ class DefaultResourceMatcher:
                 selected_field_names.append(matched_field)
                 semantic_bindings["target_field"] = matched_field
 
-        bo_bindings.append(
-            BOBinding(
-                bo_name=bo.name,
-                query_mode=query_mode,
-                selected_field_names=selected_field_names,
-            )
-        )
-        semantic_bindings["bo_name"] = bo.name
-        semantic_bindings["query_mode"] = query_mode.value
+        if wants_fn or fn_keyword_hit:
+            function_index = build_function_index(env.available_functions)
+            matched_full = self._match_names(search_texts, function_index.by_full_name.keys())
+            for full_name in matched_full:
+                fn = function_index.by_full_name[full_name]
+                key = (fn.class_name, fn.method_name)
+                if key not in function_seen:
+                    function_seen.add(key)
+                    function_bindings.append(FunctionBinding(class_name=fn.class_name, method_name=fn.method_name))
 
-    def _bind_function(
-        self,
-        intent: NodeIntent,
-        env: ResolvedEnvironment,
-        function_bindings: list[FunctionBinding],
-        semantic_bindings: dict[str, str],
-        missing_resources: list[MissingResource],
-    ) -> None:
-        slots = intent.semantic_slots or {}
-        function_name = str(slots.get("function_name") or "").strip()
+            matched_methods = self._match_names(search_texts, function_index.by_method_name.keys())
+            for method_name in matched_methods:
+                for fn in function_index.by_method_name.get(method_name, []):
+                    key = (fn.class_name, fn.method_name)
+                    if key not in function_seen:
+                        function_seen.add(key)
+                        function_bindings.append(FunctionBinding(class_name=fn.class_name, method_name=fn.method_name))
 
-        if IntentSourceType.FUNCTION not in intent.source_types and not function_name:
-            return
-
-        fn = self._match_function(function_name, env.available_functions)
-        if fn is None:
-            missing_resources.append(
-                self._build_missing_resource(
-                    resource_type="function",
-                    resource_name=function_name or "function_call_target",
-                    reason="No matched function from semantic slots.",
+            if wants_fn and not (matched_full or matched_methods):
+                missing_resources.append(
+                    MissingResource(
+                        resource_type="function",
+                        resource_name="function_call_target",
+                        reason="No matched function name in requirement/operations.",
+                    )
                 )
             )
             return
