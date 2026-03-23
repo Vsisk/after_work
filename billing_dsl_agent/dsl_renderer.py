@@ -3,7 +3,7 @@ from __future__ import annotations
 from billing_dsl_agent.models import ExprKind, ExprNode
 
 
-class DSLRenderer:
+class EDSLRenderer:
     def render(self, expr: ExprNode) -> str:
         if expr.kind == ExprKind.LITERAL:
             return self._render_literal(expr.value)
@@ -63,5 +63,9 @@ class DSLRenderer:
         return str(value)
 
 
+class DSLRenderer(EDSLRenderer):
+    pass
+
+
 def render(expr: ExprNode) -> str:
-    return DSLRenderer().render(expr)
+    return EDSLRenderer().render(expr)

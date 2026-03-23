@@ -4,7 +4,7 @@ from billing_dsl_agent.models import ExprKind, ExprNode, PlanDraft
 
 
 class ASTBuilder:
-    def build_ast(self, plan: PlanDraft) -> ExprNode:
+    def build(self, plan: PlanDraft) -> ExprNode:
         pattern = plan.expression_pattern
         if pattern == "if":
             cond_ref = str(plan.semantic_slots.get("condition_ref") or plan.context_refs[0])
@@ -51,6 +51,9 @@ class ASTBuilder:
 
         return ExprNode(kind=ExprKind.LITERAL, value=plan.semantic_slots.get("literal"))
 
+    def build_ast(self, plan: PlanDraft) -> ExprNode:
+        return self.build(plan)
+
 
 def build_ast(plan: PlanDraft) -> ExprNode:
-    return ASTBuilder().build_ast(plan)
+    return ASTBuilder().build(plan)

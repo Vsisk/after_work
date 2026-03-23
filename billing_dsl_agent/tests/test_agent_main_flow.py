@@ -170,8 +170,8 @@ def test_planner_payload_contains_available_functions() -> None:
     env = EnvironmentBuilder().build_environment(request)
     planner.plan("根据性别返回称谓", request.node_def, env)
     assert client.last_payload is not None
-    available_functions = client.last_payload["environment"]["available_functions"]
-    assert available_functions == [{"name": "Customer.GetSalutation", "params": ["gender"]}]
+    function_candidates = client.last_payload["candidate_resources"]["function_candidates"]
+    assert function_candidates == [{"name": "Customer.GetSalutation", "params": ["gender"]}]
 
 
 def test_plan_validator_function_signature_check() -> None:

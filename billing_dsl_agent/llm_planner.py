@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
-from billing_dsl_agent.models import Environment, NodeDef, PlanDraft
+from billing_dsl_agent.models import PlanDraft
 
 
 class OpenAIClient(Protocol):
@@ -31,40 +31,30 @@ class LLMPlanner:
         self.client = client
         self.prompt_dir = Path(__file__).resolve().parent / "prompts"
 
-    def plan(self, user_requirement: str, node_def: NodeDef, env: Environment) -> PlanDraft:
+    def plan(self, user_query: str, node_info: Any, candidate_set_or_env: Any) -> PlanDraft:
         payload = {
             "mode": "plan",
             "prompt": self._load_prompt("plan_prompt.txt"),
-            "user_requirement": user_requirement,
-            "node_def": {
-                "node_id": node_def.node_id,
-                "node_path": node_def.node_path,
-                "node_name": node_def.node_name,
-                "data_type": node_def.data_type,
-            },
-            "environment": {
-                "context_paths": env.context_paths,
-                "bo_schema": env.bo_schema,
-                "function_schema": env.function_schema,
-                "available_functions": self._available_functions(env.function_schema),
-            },
+            "user_requirement": user_query,
+            "node_info": self._normalize_node_info(node_info),
+            "candidate_resources": self._normalize_candidate_payload(candidate_set_or_env),
         }
         raw = self.client.create_plan(payload)
         if raw is None:
             return PlanDraft(intent_summary="", expression_pattern="direct_ref", raw_plan={"fallback": True})
         return self._parse_plan(raw)
 
-    def repair(self, invalid_plan: PlanDraft, env: Environment, issues: list[str]) -> Optional[PlanDraft]:
+    def repair(self, invalid_plan: PlanDraft, environment: Any, issues: list[str]) -> Optional[PlanDraft]:
         payload = {
             "mode": "repair",
             "prompt": self._load_prompt("repair_prompt.txt"),
             "invalid_plan": invalid_plan.raw_plan or self._to_dict(invalid_plan),
             "issues": issues,
             "environment": {
-                "context_paths": env.context_paths,
-                "bo_schema": env.bo_schema,
-                "function_schema": env.function_schema,
-                "available_functions": self._available_functions(env.function_schema),
+                "context_paths": list(getattr(environment, "context_paths", []) or []),
+                "bo_schema": dict(getattr(environment, "bo_schema", {}) or {}),
+                "function_schema": list(getattr(environment, "function_schema", []) or []),
+                "available_functions": self._available_functions(list(getattr(environment, "function_schema", []) or [])),
             },
         }
         raw = self.client.create_plan(payload)
@@ -129,3 +119,56 @@ class LLMPlanner:
             else:
                 available.append({"name": full_name, "params": []})
         return available
+
+    def _normalize_node_info(self, node_info: Any) -> Dict[str, Any]:
+        if isinstance(node_info, dict):
+            return dict(node_info)
+        return {
+            "node_id": str(getattr(node_info, "node_id", "")),
+            "node_path": str(getattr(node_info, "node_path", "")),
+            "node_name": str(getattr(node_info, "node_name", "")),
+            "description": str(getattr(node_info, "description", "")),
+            "data_type": str(getattr(node_info, "data_type", "")),
+        }
+
+    def _normalize_candidate_payload(self, candidate_set_or_env: Any) -> Dict[str, Any]:
+        if hasattr(candidate_set_or_env, "context_candidates"):
+            return {
+                "context_candidates": [
+                    {
+                        "path": str(getattr(item, "path", "")),
+                        "name": str(getattr(item, "name", "")),
+                        "description": str(getattr(item, "description", "")),
+                    }
+                    for item in list(getattr(candidate_set_or_env, "context_candidates", []) or [])
+                ],
+                "bo_candidates": [
+                    {
+                        "bo_name": str(getattr(item, "bo_name", "")),
+                        "description": str(getattr(item, "description", "")),
+                        "fields": list(getattr(item, "fields", []) or []),
+                        "naming_sqls": list(getattr(item, "naming_sqls", []) or []),
+                    }
+                    for item in list(getattr(candidate_set_or_env, "bo_candidates", []) or [])
+                ],
+                "function_candidates": [
+                    {
+                        "name": str(getattr(item, "full_name", "")),
+                        "description": str(getattr(item, "description", "")),
+                        "params": list(getattr(item, "params", []) or []),
+                    }
+                    for item in list(getattr(candidate_set_or_env, "function_candidates", []) or [])
+                ],
+            }
+
+        context_paths = list(getattr(candidate_set_or_env, "context_paths", []) or [])
+        bo_schema = dict(getattr(candidate_set_or_env, "bo_schema", {}) or {})
+        function_schema = list(getattr(candidate_set_or_env, "function_schema", []) or [])
+        return {
+            "context_candidates": [{"path": p, "name": p.split(".")[-1], "description": ""} for p in context_paths],
+            "bo_candidates": [
+                {"bo_name": k, "description": "", "fields": list(v), "naming_sqls": []}
+                for k, v in bo_schema.items()
+            ],
+            "function_candidates": self._available_functions(function_schema),
+        }

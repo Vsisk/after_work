@@ -85,3 +85,21 @@ class GenerateDSLResponse:
     ast: Optional[ExprNode] = None
     validation: Optional[ValidationResult] = None
     failure_reason: str = ""
+
+
+@dataclass(slots=True)
+class GenerateExpressionRequest:
+    node_info: Dict[str, Any]
+    user_query: str
+    site_id: str
+    project_id: str
+    debug: bool = False
+
+
+@dataclass(slots=True)
+class GenerateExpressionResponse:
+    success: bool
+    edsl_expression: str = ""
+    failure_reason: Optional[str] = None
+    plan: Optional[Any] = None
+    validation: Optional[Any] = None
