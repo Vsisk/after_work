@@ -2,6 +2,7 @@
 
 from .dsl_renderer import DefaultDSLRenderer
 from .environment_resolver import DefaultEnvironmentResolver
+from .external_resource_loader import load_bo, load_context, load_function
 from .explanation_builder import DefaultExplanationBuilder
 from .orchestrator import CodeAgentOrchestrator
 from .resource_index import BOIndex, ContextIndex, FunctionIndex, build_bo_index, build_context_path_index, build_function_index
@@ -25,4 +26,7 @@ __all__ = [
     "build_context_path_index",
     "build_bo_index",
     "build_function_index",
+    "load_context",
+    "load_bo",
+    "load_function",
 ]
