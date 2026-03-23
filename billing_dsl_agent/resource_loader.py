@@ -15,6 +15,7 @@ class LoadedResources:
     context_registry: ContextRegistry
     bo_registry: BORegistry
     function_payload: Dict[str, Any]
+    edsl_tree: Dict[str, Any]
 
 
 class ResourceProvider(Protocol):
@@ -43,4 +44,5 @@ class ResourceLoader:
             context_registry=context_registry,
             bo_registry=bo_registry,
             function_payload=function_payload,
+            edsl_tree=payload.get("edsl") or {},
         )

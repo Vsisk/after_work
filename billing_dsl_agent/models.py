@@ -59,6 +59,7 @@ class ResourceRegistry:
     contexts: Dict[str, ContextResource] = field(default_factory=dict)
     bos: Dict[str, BOResource] = field(default_factory=dict)
     functions: Dict[str, FunctionResource] = field(default_factory=dict)
+    edsl_tree: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

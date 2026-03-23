@@ -29,25 +29,35 @@ def _dataset() -> dict:
                             ],
                         }
                     ],
-                },
-                "sub_global_context": [
+                }
+            },
+            "edsl": {
+                "node_path": "invoice",
+                "node_name": "invoice",
+                "node_type": "parent",
+                "local_context": [
+                    {"id": "lc-invoice-id", "name": "invoiceId", "description": "单据ID", "path": "$local$.invoiceId"}
+                ],
+                "children": [
                     {
-                        "property_id": "lc_invoice",
-                        "property_name": "invoice",
-                        "annotation": "单据局部上下文",
-                        "value_source_type": "sub_property_wise",
-                        "sub_properties": [
+                        "node_path": "invoice.customer",
+                        "node_name": "customer",
+                        "node_type": "parent list",
+                        "local_context": [{"name": "customerLevel", "description": "客户等级"}],
+                        "children": [
                             {
-                                "property_id": "lc_invoice_customer",
-                                "property_name": "customer",
-                                "annotation": "单据中的客户",
-                                "value_source_type": "sub_property_wise",
-                                "sub_properties": [
-                                    {"property_id": "lc_invoice_customer_gender", "property_name": "gender", "annotation": "局部客户性别", "value_source_type": "cdsl"}
-                                ],
+                                "node_path": "invoice.customer.title",
+                                "node_name": "title",
+                                "node_type": "leaf",
                             }
                         ],
-                    }
+                    },
+                    {
+                        "node_path": "invoice.billing",
+                        "node_name": "billing",
+                        "node_type": "leaf",
+                        "local_context": [{"name": "should_not_visible", "description": "非法来源"}],
+                    },
                 ],
             },
             "bo": {
@@ -123,20 +133,23 @@ def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> Genera
     )
 
 
-def test_loader_normalization_and_filtering_pipeline() -> None:
+def _build_filtered_env():
     provider = InMemoryResourceProvider(dataset=_dataset())
     loader = ResourceLoader(provider=provider)
     loaded = loader.load("site-a", "proj-1")
     registry = ResourceNormalizer().normalize(loaded)
-    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
+    return EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
         node_info=_request().node_def,
         user_query="根据性别生成称谓",
         registry=registry,
     )
 
-    assert registry.contexts
-    assert registry.bos
-    assert registry.functions
+
+def test_loader_normalization_and_filtering_pipeline() -> None:
+    filtered = _build_filtered_env()
+    assert filtered.registry.contexts
+    assert filtered.registry.bos
+    assert filtered.registry.functions
     assert filtered.selected_global_context_ids
     assert filtered.selected_bo_ids
     assert filtered.selected_function_ids
@@ -150,16 +163,35 @@ def test_context_bo_function_independent_filtering() -> None:
         user_query="根据性别生成称谓",
         registry=registry,
     )
-
     assert len(filtered.selected_global_context_ids) == 1
     assert len(filtered.selected_bo_ids) == 1
     assert len(filtered.selected_function_ids) == 1
 
 
+def test_local_context_inherits_from_edsl_ancestors() -> None:
+    filtered = _build_filtered_env()
+    local_resources = {cid: filtered.registry.contexts[cid] for cid in filtered.selected_local_context_ids}
+    names = {item.name for item in local_resources.values()}
+    assert "invoiceId" in names
+    assert "customerLevel" in names
+
+
+def test_only_parent_or_parent_list_provide_local_context() -> None:
+    filtered = _build_filtered_env()
+    names = {filtered.registry.contexts[cid].name for cid in filtered.selected_local_context_ids}
+    assert "should_not_visible" not in names
+
+
+def test_global_context_comes_from_context_json_not_edsl() -> None:
+    filtered = _build_filtered_env()
+    global_names = {filtered.registry.contexts[cid].name for cid in filtered.selected_global_context_ids}
+    assert "customer" in global_names or "gender" in global_names
+    assert "invoiceId" not in global_names
+
+
 def test_bo_filter_respects_is_ab_data_source() -> None:
     provider = InMemoryResourceProvider(dataset=_dataset())
     registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
-
     filtered_non_ab = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=5)).build_filtered_environment(
         node_info=_request(is_ab=False).node_def,
         user_query="查询发票",
@@ -170,7 +202,6 @@ def test_bo_filter_respects_is_ab_data_source() -> None:
         user_query="查询发票",
         registry=registry,
     )
-
     assert len(filtered_non_ab.selected_bo_ids) >= 2
     assert filtered_ab.selected_bo_ids == ["bo:CustomerBO"]
 
@@ -186,7 +217,6 @@ def test_planner_only_sees_filtered_ids() -> None:
     agent = _build_agent(plan)
     response = agent.generate_dsl(_request())
     payload = agent.llm_planner.client.last_payload
-
     assert response.success is True
     assert payload is not None
     assert "selected_function_ids" in payload["environment"]
@@ -194,13 +224,7 @@ def test_planner_only_sees_filtered_ids() -> None:
 
 
 def test_ast_builder_builds_valid_edsl_by_resource_id() -> None:
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
-    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
-        node_info=_request().node_def,
-        user_query="根据性别生成称谓",
-        registry=registry,
-    )
+    filtered = _build_filtered_env()
     plan = LLMPlanner(
         StubOpenAIClient(
             plan_response={
@@ -219,7 +243,6 @@ def test_ast_builder_builds_valid_edsl_by_resource_id() -> None:
             }
         )
     ).plan("x", _request().node_def, filtered)
-
     ast = ASTBuilder().build_ast(plan, filtered)
     assert ast.value == "CustomerBO"
     assert ast.metadata["target_field"] == "name"
@@ -233,7 +256,6 @@ def test_validator_detects_illegal_reference() -> None:
         user_query="根据性别生成称谓",
         registry=registry,
     )
-
     bad_plan = LLMPlanner(
         StubOpenAIClient(
             plan_response={
@@ -245,7 +267,6 @@ def test_validator_detects_illegal_reference() -> None:
             }
         )
     ).plan("x", _request().node_def, filtered)
-
     result = PlanValidator(planner=None).validate(bad_plan, filtered)
     assert result.is_valid is False
     assert any("function not in filtered environment" in issue for issue in result.issues)

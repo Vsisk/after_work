@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from billing_dsl_agent.context_selector import ContextSelector
 from billing_dsl_agent.models import FilteredEnvironment, NodeDef, ResourceRegistry
 from billing_dsl_agent.semantic_selector import CandidateSummary, MockSemanticSelector, SemanticSelector
 
@@ -12,39 +13,27 @@ class EnvironmentBuilder:
     semantic_selector: SemanticSelector = field(default_factory=MockSemanticSelector)
 
     def build_filtered_environment(self, node_info: NodeDef, user_query: str, registry: ResourceRegistry) -> FilteredEnvironment:
-        local_context_ids = self._select_local_context_ids(node_info, registry)
-        global_context_ids = self._select_global_context_ids(node_info, user_query, registry)
-        bo_ids = self._select_bo_ids(node_info, user_query, registry)
-        function_ids = self._select_function_ids(node_info, user_query, registry)
+        working_registry = ResourceRegistry(
+            contexts=dict(registry.contexts),
+            bos=dict(registry.bos),
+            functions=dict(registry.functions),
+            edsl_tree=dict(registry.edsl_tree),
+        )
+        context_selector = ContextSelector(semantic_selector=self.semantic_selector)
+        local_contexts = context_selector.resolve_local_context_from_edsl_tree(node_info.node_path, working_registry.edsl_tree)
+        working_registry.contexts.update(local_contexts)
+
+        local_context_ids = sorted(local_contexts.keys())
+        global_context_ids = context_selector.select_global_context_from_context_json(user_query, node_info, working_registry)
+        bo_ids = self._select_bo_ids(node_info, user_query, working_registry)
+        function_ids = self._select_function_ids(node_info, user_query, working_registry)
         return FilteredEnvironment(
-            registry=registry,
+            registry=working_registry,
             selected_global_context_ids=global_context_ids,
             selected_local_context_ids=local_context_ids,
             selected_bo_ids=bo_ids,
             selected_function_ids=function_ids,
         )
-
-    def _select_local_context_ids(self, node_info: NodeDef, registry: ResourceRegistry) -> List[str]:
-        parent_segments = [seg for seg in node_info.node_path.split(".")[:-1] if seg]
-        matched: List[str] = []
-        for context in registry.contexts.values():
-            if context.scope != "local":
-                continue
-            context_segments = context.path.split(".")
-            if any(seg in context_segments for seg in parent_segments):
-                matched.append(context.resource_id)
-        if not matched:
-            matched = [ctx.resource_id for ctx in registry.contexts.values() if ctx.scope == "local"]
-        return sorted(set(matched))
-
-    def _select_global_context_ids(self, node_info: NodeDef, user_query: str, registry: ResourceRegistry) -> List[str]:
-        domains = self._recall_domains(node_info, user_query, {c.domain for c in registry.contexts.values() if c.scope == "global"})
-        candidates = [
-            CandidateSummary(resource_id=c.resource_id, description=f"{c.name} {c.description} {c.path}", tags=[c.domain, *c.tags])
-            for c in registry.contexts.values()
-            if c.scope == "global" and c.domain in domains
-        ]
-        return self.semantic_selector.select("context", node_info, user_query, candidates)
 
     def _select_bo_ids(self, node_info: NodeDef, user_query: str, registry: ResourceRegistry) -> List[str]:
         bo_values = list(registry.bos.values())

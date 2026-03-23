@@ -1,4 +1,4 @@
-# Environment 资源筛选链路增强设计
+# Environment 资源筛选链路增强设计（修正版）
 
 ## What
 在现有 Billing DSL Agent 架构上增强并串接以下主链路：
@@ -8,69 +8,43 @@
 并实现三类资源（context / BO / function）独立筛选，且统一使用 `resource_id` 进行引用。
 
 ## Why
-当前实现中的环境对象偏静态容器，planner 与 validator 主要依赖 path/name 字符串，缺少：
+本次修正重点是 context 来源纠偏：
 
-1. 真实加载层（site/project 维度）；
-2. 稳定资源 ID 与 registry 回查；
-3. context/BO/function 的独立语义筛选；
-4. AB 节点数据源约束；
-5. planner/validator/ast 对 filtered environment 的一致约束。
+1. `local context` 必须来自 `edsl.json` 的节点树祖先递归，不来自 context.json；
+2. `global context` 必须来自 `context.json`，并做语义筛选；
+3. 二者来源、处理流程、selector 阶段必须解耦。
 
 ## How
 
-### 新增与改造范围
-1. 新增 `resource_loader.py`
-   - `ResourceProvider` / `InMemoryResourceProvider` / `ResourceLoader`
-   - 按 `site_id + project_id` 加载 context/bo/function 原始数据。
+### loader 职责拆分
+- `context.json`：只承载 global context 源数据。
+- `edsl.json`：承载节点树 + local_context 源数据。
+- 两者都通过 `site_id + project_id` 加载。
 
-2. 新增 `resource_normalizer.py`
-   - 将 loader 输出标准化为 `ResourceRegistry`。
-   - 统一生成稳定 `resource_id`：
-     - context: `context:$ctx$.a.b`
-     - bo: `bo:BOName`
-     - function: `function:Class.Func`
+### normalizer 职责
+- 将 `context.json` 归一化为 global context registry（稳定 resource_id）。
+- 保留 `edsl_tree` 原始结构进入 registry，供后续 local context 解析。
 
-3. 增强 `models.py`
-   - 扩展 `NodeDef`（支持 `is_ab`, `ab_data_sources`）
-   - 新增 `ContextResource/BOResource/FunctionResource/ResourceRegistry/FilteredEnvironment`
+### environment/context selector 职责
+- 阶段 1：`resolve_local_context_from_edsl_tree(node_path)`
+  - 在 edsl 树中定位目标节点；
+  - 沿祖先链递归向上；
+  - 仅 `parent` / `parent list` 节点参与 local_context 收集；
+  - 若缺失显式 id，生成稳定资源 id。
+- 阶段 2：`select_global_context_from_context_json(user_query, node_info)`
+  - 对 global context 做候选召回 + 语义排序。
 
-4. 增强 `environment.py`
-   - environment 成为筛选核心；
-   - local context：基于 `node_path` 父链路筛选；
-   - global context：domain recall + semantic selector；
-   - bo：分 `is_ab` 分支，支持 data_source 约束；
-   - function：独立语义筛选；
-   - 三类资源分别调用 selector。
-
-5. 新增 `semantic_selector.py`
-   - 定义统一接口 `SemanticSelector.select(...)`；
-   - `MockSemanticSelector` 通过 token overlap 排序，可替换为真实 OpenAI 语义检索。
-
-6. 改造 `llm_planner.py`
-   - planner 输入改为 `FilteredEnvironment`；
-   - payload 仅暴露筛选后的 resource ids。
-
-7. 改造 `plan_validator.py`
-   - 校验 resource id 是否存在、是否在 filtered environment 中；
-   - BO field/naming_sql/data_source/params 校验；
-   - function 参数个数校验。
-
-8. 改造 `ast_builder.py`
-   - 严格通过 `resource_id` 回查 registry，生成最终 EDSL AST。
-
-9. 改造 `agent_entry.py`
-   - 串接完整主链路执行。
-
-### 兼容性与风险
-- 属于接口级变更（`GenerateDSLRequest` 输入结构、planner/validator/ast 构建输入）；
-- 通过单测覆盖链路行为，保证功能真实性。
+### 其余模块
+- planner：只看 filtered ids；
+- validator：校验引用存在性和 filtered-membership；
+- ast builder：通过 resource_id 回查 registry。
 
 ### 测试策略
-覆盖以下场景：
-1. loader 正常加载资源；
-2. environment 正常筛选资源；
-3. context / BO / function 独立筛选；
-4. `is_ab` 分支逻辑；
-5. planner 只使用筛选后资源；
-6. AST builder 可生成合法 EDSL 片段；
-7. validator 能发现非法引用。
+覆盖：
+1. loader + normalization + filtering 主链路；
+2. local context 沿 node path 祖先继承；
+3. 仅 parent / parent list 提供 local context；
+4. global context 来自 context.json 而非 edsl；
+5. context/bo/function 独立筛选；
+6. is_ab BO 分支；
+7. planner/validator/ast 联动正确。

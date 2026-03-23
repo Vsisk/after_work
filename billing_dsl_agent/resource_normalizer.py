@@ -12,46 +12,36 @@ from billing_dsl_agent.resource_loader import LoadedResources
 @dataclass(slots=True)
 class ResourceNormalizer:
     def normalize(self, loaded: LoadedResources) -> ResourceRegistry:
-        contexts = self._normalize_contexts(loaded)
+        contexts = self._normalize_global_contexts(loaded)
         bos = self._normalize_bos(loaded)
         functions = self._normalize_functions(loaded)
-        return ResourceRegistry(contexts=contexts, bos=bos, functions=functions)
+        return ResourceRegistry(contexts=contexts, bos=bos, functions=functions, edsl_tree=dict(loaded.edsl_tree or {}))
 
-    def _normalize_contexts(self, loaded: LoadedResources) -> dict[str, ContextResource]:
+    def _normalize_global_contexts(self, loaded: LoadedResources) -> dict[str, ContextResource]:
         registry: dict[str, ContextResource] = {}
         root = loaded.context_registry.global_root
         if root is None:
             return registry
-
-        local_ids: set[str] = set()
-        for local_root in loaded.context_registry.local_roots:
-            self._collect_context_ids(local_root, local_ids)
 
         def walk(node: ContextPropertyDef, parent_path: str) -> None:
             for index, child in enumerate(node.children):
                 segment = child.name or child.id or f"node{index}"
                 path = f"{parent_path}.{segment}" if parent_path else segment
                 resource_id = f"context:{path}"
-                scope = "local" if child.id in local_ids else "global"
                 domain = path.split(".")[1] if "." in path else "default"
                 registry[resource_id] = ContextResource(
                     resource_id=resource_id,
                     name=child.name,
                     path=path,
-                    scope=scope,
+                    scope="global",
                     domain=domain,
                     description=child.description,
-                    tags=[child.metadata.get("raw_value_source_type", "")],
+                    tags=["context_json", child.metadata.get("raw_value_source_type", "")],
                 )
                 walk(child, path)
 
         walk(root, "$ctx$")
         return registry
-
-    def _collect_context_ids(self, node: ContextPropertyDef, bucket: set[str]) -> None:
-        bucket.add(node.id)
-        for child in node.children:
-            self._collect_context_ids(child, bucket)
 
     def _normalize_bos(self, loaded: LoadedResources) -> dict[str, BOResource]:
         registry: dict[str, BOResource] = {}
