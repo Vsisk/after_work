@@ -27,11 +27,6 @@ class DefaultResourceMatcher:
     def match(self, intent: NodeIntent, env: ResolvedEnvironment) -> ResourceBinding:
         requirement = (intent.raw_requirement or "").strip()
 
-        global_index = build_context_path_index(env.global_context_vars)
-        local_index = build_context_path_index(env.local_context_vars)
-        bo_index = build_bo_index(env.available_bos)
-        function_index = build_function_index(env.available_functions)
-
         context_bindings: list[ContextBinding] = []
         bo_bindings: list[BOBinding] = []
         function_bindings: list[FunctionBinding] = []
@@ -48,8 +43,13 @@ class DefaultResourceMatcher:
 
         op_texts = [op.description for op in intent.operations]
         search_texts = [requirement, *op_texts]
+        context_keyword_hit = self._contains_any(search_texts, ["$ctx$", "context", "上下文"])
+        local_keyword_hit = self._contains_any(search_texts, ["$local$", "local", "局部"])
+        bo_keyword_hit = self._contains_any(search_texts, ["select", "fetch", "bo"])
+        fn_keyword_hit = self._contains_any(search_texts, ["(", "函数", "function", "if", "exists"])
 
-        if wants_context or self._contains_any(search_texts, ["$ctx$", "context", "上下文"]):
+        if wants_context or context_keyword_hit:
+            global_index = build_context_path_index(env.global_context_vars)
             matched = self._match_context_bindings(search_texts, global_index.by_path.keys())
             for name in matched:
                 var = global_index.by_path[name]
@@ -68,7 +68,8 @@ class DefaultResourceMatcher:
                     )
                 )
 
-        if wants_local or self._contains_any(search_texts, ["$local$", "local", "局部"]):
+        if wants_local or local_keyword_hit:
+            local_index = build_context_path_index(env.local_context_vars)
             matched = self._match_context_bindings(search_texts, local_index.by_path.keys())
             for name in matched:
                 var = local_index.by_path[name]
@@ -87,7 +88,8 @@ class DefaultResourceMatcher:
                     )
                 )
 
-        if wants_bo or self._contains_any(search_texts, ["select", "fetch", "bo"]):
+        if wants_bo or bo_keyword_hit:
+            bo_index = build_bo_index(env.available_bos)
             matched_bo_names = self._match_names(search_texts, bo_index.by_name.keys())
             inferred_mode = self._infer_query_mode(search_texts)
             for bo_name in matched_bo_names:
@@ -104,7 +106,8 @@ class DefaultResourceMatcher:
                     )
                 )
 
-        if wants_fn or self._contains_any(search_texts, ["(", "函数", "function", "if", "exists"]):
+        if wants_fn or fn_keyword_hit:
+            function_index = build_function_index(env.available_functions)
             matched_full = self._match_names(search_texts, function_index.by_full_name.keys())
             for full_name in matched_full:
                 fn = function_index.by_full_name[full_name]
