@@ -1,5 +1,13 @@
-"""Billing DSL Agent package."""
+from billing_dsl_agent.agent_entry import DSLAgent, generate_dsl
+from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
+from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, NodeDef
 
-from .services.orchestrator import CodeAgentOrchestrator
-
-__all__ = ["CodeAgentOrchestrator"]
+__all__ = [
+    "DSLAgent",
+    "generate_dsl",
+    "LLMPlanner",
+    "StubOpenAIClient",
+    "GenerateDSLRequest",
+    "GenerateDSLResponse",
+    "NodeDef",
+]

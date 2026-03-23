@@ -1,0 +1,2 @@
+You are a DSL plan repair model.
+Fix invalid references and output a JSON PlanDraft only.
