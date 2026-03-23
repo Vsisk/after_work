@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from billing_dsl_agent.ast_builder import ASTBuilder
 from billing_dsl_agent.dsl_renderer import DSLRenderer
@@ -24,11 +24,11 @@ class FinalValidator:
 @dataclass(slots=True)
 class DSLAgent:
     llm_planner: LLMPlanner
-    environment_builder: EnvironmentBuilder = EnvironmentBuilder()
+    environment_builder: EnvironmentBuilder = field(default_factory=EnvironmentBuilder)
     plan_validator: PlanValidator | None = None
-    ast_builder: ASTBuilder = ASTBuilder()
-    dsl_renderer: DSLRenderer = DSLRenderer()
-    final_validator: FinalValidator = FinalValidator()
+    ast_builder: ASTBuilder = field(default_factory=ASTBuilder)
+    dsl_renderer: DSLRenderer = field(default_factory=DSLRenderer)
+    final_validator: FinalValidator = field(default_factory=FinalValidator)
 
     def __post_init__(self) -> None:
         if self.plan_validator is None:
