@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
-from billing_dsl_agent.models import Environment, NodeDef, PlanDraft
+from billing_dsl_agent.models import FilteredEnvironment, NodeDef, PlanDraft
 
 
 class OpenAIClient(Protocol):
@@ -31,7 +31,7 @@ class LLMPlanner:
         self.client = client
         self.prompt_dir = Path(__file__).resolve().parent / "prompts"
 
-    def plan(self, user_requirement: str, node_def: NodeDef, env: Environment) -> PlanDraft:
+    def plan(self, user_requirement: str, node_def: NodeDef, env: FilteredEnvironment) -> PlanDraft:
         payload = {
             "mode": "plan",
             "prompt": self._load_prompt("plan_prompt.txt"),
@@ -41,36 +41,35 @@ class LLMPlanner:
                 "node_path": node_def.node_path,
                 "node_name": node_def.node_name,
                 "data_type": node_def.data_type,
+                "is_ab": node_def.is_ab,
             },
-            "environment": {
-                "context_paths": env.context_paths,
-                "bo_schema": env.bo_schema,
-                "function_schema": env.function_schema,
-                "available_functions": self._available_functions(env.function_schema),
-            },
+            "environment": self._build_env_payload(env),
         }
         raw = self.client.create_plan(payload)
         if raw is None:
             return PlanDraft(intent_summary="", expression_pattern="direct_ref", raw_plan={"fallback": True})
         return self._parse_plan(raw)
 
-    def repair(self, invalid_plan: PlanDraft, env: Environment, issues: list[str]) -> Optional[PlanDraft]:
+    def repair(self, invalid_plan: PlanDraft, env: FilteredEnvironment, issues: list[str]) -> Optional[PlanDraft]:
         payload = {
             "mode": "repair",
             "prompt": self._load_prompt("repair_prompt.txt"),
             "invalid_plan": invalid_plan.raw_plan or self._to_dict(invalid_plan),
             "issues": issues,
-            "environment": {
-                "context_paths": env.context_paths,
-                "bo_schema": env.bo_schema,
-                "function_schema": env.function_schema,
-                "available_functions": self._available_functions(env.function_schema),
-            },
+            "environment": self._build_env_payload(env),
         }
         raw = self.client.create_plan(payload)
         if raw is None:
             return None
         return self._parse_plan(raw)
+
+    def _build_env_payload(self, env: FilteredEnvironment) -> Dict[str, Any]:
+        return {
+            "selected_global_context_ids": env.selected_global_context_ids,
+            "selected_local_context_ids": env.selected_local_context_ids,
+            "selected_bo_ids": env.selected_bo_ids,
+            "selected_function_ids": env.selected_function_ids,
+        }
 
     @staticmethod
     def _to_dict(plan: PlanDraft) -> Dict[str, Any]:
@@ -103,29 +102,3 @@ class LLMPlanner:
             semantic_slots=dict(data.get("semantic_slots") or {}),
             raw_plan=dict(data.get("raw_plan") or data),
         )
-
-    def _available_functions(self, function_schema: list[Any]) -> list[Dict[str, Any]]:
-        available: list[Dict[str, Any]] = []
-        for item in function_schema:
-            if isinstance(item, str):
-                available.append({"name": item, "params": []})
-                continue
-            if not isinstance(item, dict):
-                continue
-            full_name = str(item.get("full_name") or item.get("name") or "").strip()
-            if not full_name:
-                continue
-            params = item.get("params") or item.get("param_list") or []
-            if isinstance(params, list):
-                parsed_params: list[str] = []
-                for p in params:
-                    if isinstance(p, str):
-                        parsed_params.append(p)
-                    elif isinstance(p, dict):
-                        param_name = str(p.get("param_name") or p.get("name") or "").strip()
-                        if param_name:
-                            parsed_params.append(param_name)
-                available.append({"name": full_name, "params": parsed_params})
-            else:
-                available.append({"name": full_name, "params": []})
-        return available

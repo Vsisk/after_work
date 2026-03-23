@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict
 from typing import Optional
 
 from billing_dsl_agent.llm_planner import LLMPlanner
-from billing_dsl_agent.models import Environment, PlanDraft, ValidationResult
+from billing_dsl_agent.models import FilteredEnvironment, PlanDraft, ValidationResult
 
 
 class PlanValidator:
@@ -23,7 +22,7 @@ class PlanValidator:
         self.planner = planner
         self.max_retries = max_retries
 
-    def validate(self, plan: PlanDraft, env: Environment) -> ValidationResult:
+    def validate(self, plan: PlanDraft, env: FilteredEnvironment) -> ValidationResult:
         current = plan
         attempts = 0
         while True:
@@ -38,73 +37,69 @@ class PlanValidator:
             current = repaired
             attempts += 1
 
-    def _collect_issues(self, plan: PlanDraft, env: Environment) -> list[str]:
+    def _collect_issues(self, plan: PlanDraft, env: FilteredEnvironment) -> list[str]:
         issues: list[str] = []
-        function_catalog = self._build_function_catalog(env.function_schema)
+        registry = env.registry
+        filtered_contexts = set(env.selected_global_context_ids) | set(env.selected_local_context_ids)
+        filtered_bos = set(env.selected_bo_ids)
+        filtered_functions = set(env.selected_function_ids)
+
         if plan.expression_pattern not in self.ALLOWED_PATTERNS:
             issues.append(f"unsupported expression_pattern: {plan.expression_pattern}")
 
-        for ctx in plan.context_refs:
-            if ctx not in env.context_paths:
-                issues.append(f"fake context path: {ctx}")
-
-        for ref in plan.bo_refs:
-            bo_name = str(ref.get("bo_name") or "").strip()
-            if not bo_name or bo_name not in env.bo_schema:
-                issues.append(f"unknown bo: {bo_name or '<empty>'}")
+        for context_id in plan.context_refs:
+            if context_id not in registry.contexts:
+                issues.append(f"unknown context id: {context_id}")
                 continue
+            if context_id not in filtered_contexts:
+                issues.append(f"context not in filtered environment: {context_id}")
 
-            field = str(ref.get("field") or ref.get("target_field") or "").strip()
-            if field and field not in env.bo_schema.get(bo_name, []):
-                issues.append(f"unknown bo field: {bo_name}.{field}")
+        for bo_ref in plan.bo_refs:
+            bo_id = str(bo_ref.get("bo_id") or "").strip()
+            if bo_id not in registry.bos:
+                issues.append(f"unknown bo id: {bo_id or '<empty>'}")
+                continue
+            if bo_id not in filtered_bos:
+                issues.append(f"bo not in filtered environment: {bo_id}")
 
-            for selected in ref.get("selected_fields") or ref.get("selected_field_names") or []:
-                s = str(selected).strip()
-                if s and s not in env.bo_schema.get(bo_name, []):
-                    issues.append(f"unknown bo field: {bo_name}.{s}")
+            bo = registry.bos[bo_id]
+            field_id = str(bo_ref.get("field_id") or "").strip()
+            if field_id and field_id not in bo.field_ids:
+                issues.append(f"unknown bo field id: {field_id}")
 
-            for param in ref.get("params") or []:
+            for item in bo_ref.get("field_ids") or []:
+                if str(item) not in bo.field_ids:
+                    issues.append(f"unknown bo field id: {item}")
+
+            data_source = str(bo_ref.get("data_source") or "").strip()
+            if data_source and bo.data_source and data_source != bo.data_source:
+                issues.append(f"bo data source mismatch: {bo_id}")
+
+            naming_sql_id = str(bo_ref.get("naming_sql_id") or "").strip()
+            if naming_sql_id and naming_sql_id not in bo.naming_sql_ids:
+                issues.append(f"unknown naming sql id: {naming_sql_id}")
+
+            for param in bo_ref.get("params") or []:
                 value = str(param.get("value") or "").strip()
                 if not value:
-                    issues.append(f"empty namingSQL param value: {bo_name}.{param.get('param_name', '')}")
+                    issues.append(f"empty namingSQL param value: {bo_id}.{param.get('param_name', '')}")
                     continue
                 source_type = str(param.get("value_source_type") or "").strip()
                 if source_type not in self.ALLOWED_PARAM_SOURCE:
                     issues.append(f"invalid value_source_type: {source_type}")
-                if source_type == "context" and value not in env.context_paths:
-                    issues.append(f"fake context path in param: {value}")
+                if source_type == "context" and value not in filtered_contexts:
+                    issues.append(f"param context not in filtered environment: {value}")
 
-        for fn_name in plan.function_refs:
-            if fn_name not in function_catalog:
-                issues.append(f"unknown function: {fn_name}")
+        for function_id in plan.function_refs:
+            if function_id not in registry.functions:
+                issues.append(f"unknown function id: {function_id}")
                 continue
-            expected = function_catalog.get(fn_name, [])
+            if function_id not in filtered_functions:
+                issues.append(f"function not in filtered environment: {function_id}")
+                continue
+            expected = registry.functions[function_id].params
             actual_args = plan.semantic_slots.get("function_args") or []
             if isinstance(actual_args, list) and expected and len(actual_args) != len(expected):
-                issues.append(f"function args mismatch: {fn_name} expected {len(expected)} got {len(actual_args)}")
+                issues.append(f"function args mismatch: {function_id} expected {len(expected)} got {len(actual_args)}")
 
         return issues
-
-    def _build_function_catalog(self, function_schema: list[Any]) -> Dict[str, list[str]]:
-        catalog: Dict[str, list[str]] = {}
-        for item in function_schema:
-            if isinstance(item, str):
-                catalog[item] = []
-                continue
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("full_name") or item.get("name") or "").strip()
-            if not name:
-                continue
-            params = item.get("params") or item.get("param_list") or []
-            parsed_params: list[str] = []
-            if isinstance(params, list):
-                for p in params:
-                    if isinstance(p, str):
-                        parsed_params.append(p)
-                    elif isinstance(p, dict):
-                        param_name = str(p.get("param_name") or p.get("name") or "").strip()
-                        if param_name:
-                            parsed_params.append(param_name)
-            catalog[name] = parsed_params
-        return catalog

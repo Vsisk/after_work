@@ -12,10 +12,67 @@ class NodeDef:
     node_name: str
     data_type: str = "unknown"
     description: str = ""
+    is_ab: bool = False
+    ab_data_sources: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ContextResource:
+    resource_id: str
+    name: str
+    path: str
+    scope: str = "global"
+    domain: str = "default"
+    description: str = ""
+    tags: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class BOResource:
+    resource_id: str
+    bo_name: str
+    field_ids: List[str] = field(default_factory=list)
+    data_source: str = ""
+    naming_sql_ids: List[str] = field(default_factory=list)
+    scope: str = "system"
+    domain: str = "default"
+    description: str = ""
+    tags: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class FunctionResource:
+    resource_id: str
+    function_id: str
+    name: str
+    full_name: str
+    description: str = ""
+    signature: str = ""
+    params: List[str] = field(default_factory=list)
+    return_type: str = ""
+    scope: str = "func"
+    tags: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResourceRegistry:
+    contexts: Dict[str, ContextResource] = field(default_factory=dict)
+    bos: Dict[str, BOResource] = field(default_factory=dict)
+    functions: Dict[str, FunctionResource] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class FilteredEnvironment:
+    registry: ResourceRegistry
+    selected_global_context_ids: List[str] = field(default_factory=list)
+    selected_local_context_ids: List[str] = field(default_factory=list)
+    selected_bo_ids: List[str] = field(default_factory=list)
+    selected_function_ids: List[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class Environment:
+    filtered: FilteredEnvironment
     context_paths: List[str] = field(default_factory=list)
     bo_schema: Dict[str, List[str]] = field(default_factory=dict)
     function_schema: List[Any] = field(default_factory=list)
@@ -72,9 +129,8 @@ class ValidationResult:
 class GenerateDSLRequest:
     user_requirement: str
     node_def: NodeDef
-    context_schema: Dict[str, Any] = field(default_factory=dict)
-    bo_schema: Dict[str, List[str]] = field(default_factory=dict)
-    function_schema: List[Any] = field(default_factory=list)
+    site_id: str = ""
+    project_id: str = ""
 
 
 @dataclass(slots=True)

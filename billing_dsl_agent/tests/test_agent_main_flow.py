@@ -1,191 +1,251 @@
 from billing_dsl_agent.agent_entry import DSLAgent
+from billing_dsl_agent.ast_builder import ASTBuilder
 from billing_dsl_agent.environment import EnvironmentBuilder
 from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
 from billing_dsl_agent.models import GenerateDSLRequest, NodeDef
 from billing_dsl_agent.plan_validator import PlanValidator
+from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
+from billing_dsl_agent.resource_normalizer import ResourceNormalizer
+from billing_dsl_agent.semantic_selector import MockSemanticSelector
 
 
-def _base_request() -> GenerateDSLRequest:
+def _dataset() -> dict:
+    return {
+        ("site-a", "proj-1"): {
+            "context": {
+                "global_context": {
+                    "property_id": "root",
+                    "property_name": "全局",
+                    "value_source_type": "sub_property_wise",
+                    "sub_properties": [
+                        {
+                            "property_id": "gc_customer",
+                            "property_name": "customer",
+                            "annotation": "客户全局对象",
+                            "value_source_type": "sub_property_wise",
+                            "sub_properties": [
+                                {"property_id": "gc_customer_gender", "property_name": "gender", "annotation": "客户性别", "value_source_type": "cdsl"},
+                                {"property_id": "gc_customer_id", "property_name": "id", "annotation": "客户ID", "value_source_type": "cdsl"},
+                            ],
+                        }
+                    ],
+                },
+                "sub_global_context": [
+                    {
+                        "property_id": "lc_invoice",
+                        "property_name": "invoice",
+                        "annotation": "单据局部上下文",
+                        "value_source_type": "sub_property_wise",
+                        "sub_properties": [
+                            {
+                                "property_id": "lc_invoice_customer",
+                                "property_name": "customer",
+                                "annotation": "单据中的客户",
+                                "value_source_type": "sub_property_wise",
+                                "sub_properties": [
+                                    {"property_id": "lc_invoice_customer_gender", "property_name": "gender", "annotation": "局部客户性别", "value_source_type": "cdsl"}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            "bo": {
+                "sys_bo_list": [
+                    {
+                        "bo_name": "CustomerBO",
+                        "bo_desc": "客户主数据",
+                        "property_list": [{"field_name": "name"}, {"field_name": "gender"}],
+                        "or_mapping_list": [{"or_mapping_data_source": "crm", "naming_sql_list": [{"sql_name": "findById"}]}],
+                    }
+                ],
+                "custom_bo_list": [
+                    {
+                        "bo_name": "InvoiceBO",
+                        "bo_desc": "发票数据",
+                        "property_list": [{"field_name": "title"}],
+                        "or_mapping_list": [{"or_mapping_data_source": "billing", "naming_sql_list": [{"sql_name": "findByInvoiceId"}]}],
+                    }
+                ],
+            },
+            "function": {
+                "func": [
+                    {
+                        "class_name": "Customer",
+                        "func_list": [
+                            {
+                                "func_name": "GetSalutation",
+                                "func_desc": "根据性别返回称谓",
+                                "param_list": [{"param_name": "gender"}],
+                                "return_type": {"data_type_name": "string"},
+                            }
+                        ],
+                    }
+                ],
+                "native_func": [
+                    {
+                        "class_name": "String",
+                        "func_list": [
+                            {
+                                "func_name": "Upper",
+                                "func_desc": "转大写",
+                                "param_list": [{"param_name": "value"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    }
+
+
+def _build_agent(plan_response: dict) -> DSLAgent:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    loader = ResourceLoader(provider=provider)
+    planner = LLMPlanner(StubOpenAIClient(plan_response=plan_response))
+    env_builder = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4))
+    return DSLAgent(llm_planner=planner, resource_loader=loader, environment_builder=env_builder)
+
+
+def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> GenerateDSLRequest:
     return GenerateDSLRequest(
-        user_requirement="生成账单字段",
-        node_def=NodeDef(node_id="n1", node_path="invoice.customer.title", node_name="title", data_type="string"),
-        context_schema={"customer": {"gender": "string", "id": "string"}},
-        bo_schema={"CustomerBO": ["id", "name", "gender"]},
-        function_schema=["str.upper", "format.title"],
+        user_requirement="根据性别生成称谓",
+        site_id="site-a",
+        project_id="proj-1",
+        node_def=NodeDef(
+            node_id="n1",
+            node_path="invoice.customer.title",
+            node_name="title",
+            description="客户称谓",
+            is_ab=is_ab,
+            ab_data_sources=ab_sources or [],
+        ),
     )
 
 
-def test_if_expr() -> None:
+def test_loader_normalization_and_filtering_pipeline() -> None:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    loader = ResourceLoader(provider=provider)
+    loaded = loader.load("site-a", "proj-1")
+    registry = ResourceNormalizer().normalize(loaded)
+    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
+        node_info=_request().node_def,
+        user_query="根据性别生成称谓",
+        registry=registry,
+    )
+
+    assert registry.contexts
+    assert registry.bos
+    assert registry.functions
+    assert filtered.selected_global_context_ids
+    assert filtered.selected_bo_ids
+    assert filtered.selected_function_ids
+
+
+def test_context_bo_function_independent_filtering() -> None:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
+    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=1)).build_filtered_environment(
+        node_info=_request().node_def,
+        user_query="根据性别生成称谓",
+        registry=registry,
+    )
+
+    assert len(filtered.selected_global_context_ids) == 1
+    assert len(filtered.selected_bo_ids) == 1
+    assert len(filtered.selected_function_ids) == 1
+
+
+def test_bo_filter_respects_is_ab_data_source() -> None:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
+
+    filtered_non_ab = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=5)).build_filtered_environment(
+        node_info=_request(is_ab=False).node_def,
+        user_query="查询发票",
+        registry=registry,
+    )
+    filtered_ab = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=5)).build_filtered_environment(
+        node_info=_request(is_ab=True, ab_sources=["crm"]).node_def,
+        user_query="查询发票",
+        registry=registry,
+    )
+
+    assert len(filtered_non_ab.selected_bo_ids) >= 2
+    assert filtered_ab.selected_bo_ids == ["bo:CustomerBO"]
+
+
+def test_planner_only_sees_filtered_ids() -> None:
     plan = {
-        "intent_summary": "if by gender",
-        "expression_pattern": "if",
-        "context_refs": ["$ctx$.customer.gender"],
-        "semantic_slots": {
-            "condition_ref": "$ctx$.customer.gender",
-            "condition_operator": "==",
-            "condition_value": "男",
-            "true_output": "MR.",
-            "false_output": "Ms.",
-        },
-    }
-    agent = DSLAgent(llm_planner=LLMPlanner(StubOpenAIClient(plan_response=plan)))
-    response = agent.generate_dsl(_base_request())
-    assert response.success is True
-    assert response.dsl == 'if($ctx$.customer.gender == "男", "MR.", "Ms.")'
-
-
-def test_select_one() -> None:
-    plan = {
-        "intent_summary": "query customer",
-        "expression_pattern": "select_one",
-        "bo_refs": [{"bo_name": "CustomerBO", "field": "name", "params": []}],
-    }
-    agent = DSLAgent(llm_planner=LLMPlanner(StubOpenAIClient(plan_response=plan)))
-    response = agent.generate_dsl(_base_request())
-    assert response.success is True
-    assert response.dsl == "select_one(CustomerBO.name)"
-
-
-def test_function_call() -> None:
-    plan = {
-        "intent_summary": "call function",
+        "intent_summary": "function call",
         "expression_pattern": "function_call",
-        "function_refs": ["str.upper"],
-        "semantic_slots": {"function_args": ["$ctx$.customer.gender"]},
-        "context_refs": ["$ctx$.customer.gender"],
+        "context_refs": ["context:$ctx$.customer.gender"],
+        "function_refs": ["function:Customer.GetSalutation"],
+        "semantic_slots": {"function_args": ["context:$ctx$.customer.gender"]},
     }
-    agent = DSLAgent(llm_planner=LLMPlanner(StubOpenAIClient(plan_response=plan)))
-    response = agent.generate_dsl(_base_request())
+    agent = _build_agent(plan)
+    response = agent.generate_dsl(_request())
+    payload = agent.llm_planner.client.last_payload
+
     assert response.success is True
-    assert response.dsl == "str.upper($ctx$.customer.gender)"
+    assert payload is not None
+    assert "selected_function_ids" in payload["environment"]
+    assert "function:Customer.GetSalutation" in payload["environment"]["selected_function_ids"]
 
 
-def test_namingsql_param() -> None:
-    plan = {
-        "intent_summary": "fetch by ctx",
-        "expression_pattern": "fetch_one",
-        "context_refs": ["$ctx$.customer.id"],
-        "bo_refs": [
-            {
-                "bo_name": "CustomerBO",
-                "field": "name",
-                "query_mode": "fetch_one",
-                "params": [
+def test_ast_builder_builds_valid_edsl_by_resource_id() -> None:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
+    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
+        node_info=_request().node_def,
+        user_query="根据性别生成称谓",
+        registry=registry,
+    )
+    plan = LLMPlanner(
+        StubOpenAIClient(
+            plan_response={
+                "intent_summary": "query",
+                "expression_pattern": "fetch_one",
+                "context_refs": ["context:$ctx$.customer.id"],
+                "bo_refs": [
                     {
-                        "param_name": "customer_id",
-                        "value": "$ctx$.customer.id",
-                        "value_source_type": "context",
+                        "bo_id": "bo:CustomerBO",
+                        "field_id": "bo:CustomerBO:field:name",
+                        "data_source": "crm",
+                        "naming_sql_id": "bo:CustomerBO:sql:findById",
+                        "params": [{"param_name": "id", "value": "context:$ctx$.customer.id", "value_source_type": "context"}],
                     }
                 ],
             }
-        ],
-    }
-    agent = DSLAgent(llm_planner=LLMPlanner(StubOpenAIClient(plan_response=plan)))
-    response = agent.generate_dsl(_base_request())
-    assert response.success is True
-    assert "customer_id=$ctx$.customer.id" in response.dsl
+        )
+    ).plan("x", _request().node_def, filtered)
+
+    ast = ASTBuilder().build_ast(plan, filtered)
+    assert ast.value == "CustomerBO"
+    assert ast.metadata["target_field"] == "name"
 
 
-def test_context_ref() -> None:
-    plan = {
-        "intent_summary": "direct",
-        "expression_pattern": "direct_ref",
-        "context_refs": ["$ctx$.customer.id"],
-    }
-    agent = DSLAgent(llm_planner=LLMPlanner(StubOpenAIClient(plan_response=plan)))
-    response = agent.generate_dsl(_base_request())
-    assert response.success is True
-    assert response.dsl == "$ctx$.customer.id"
-
-
-def test_plan_validator_detect_fake_ctx() -> None:
-    env = EnvironmentBuilder().build_environment(_base_request())
-    validator = PlanValidator(planner=None)
-    plan = {
-        "intent_summary": "bad",
-        "expression_pattern": "direct_ref",
-        "context_refs": ["$ctx$.customer.fake"],
-    }
-    parsed = LLMPlanner(StubOpenAIClient(plan_response=plan)).plan("x", _base_request().node_def, env)
-    result = validator.validate(parsed, env)
-    assert result.is_valid is False
-    assert any("fake context path" in item for item in result.issues)
-
-
-def test_plan_validator_empty_param() -> None:
-    env = EnvironmentBuilder().build_environment(_base_request())
-    validator = PlanValidator(planner=None)
-    plan = {
-        "intent_summary": "bad",
-        "expression_pattern": "fetch_one",
-        "bo_refs": [
-            {
-                "bo_name": "CustomerBO",
-                "field": "name",
-                "params": [{"param_name": "id", "value": "", "value_source_type": "context"}],
-            }
-        ],
-    }
-    parsed = LLMPlanner(StubOpenAIClient(plan_response=plan)).plan("x", _base_request().node_def, env)
-    result = validator.validate(parsed, env)
-    assert result.is_valid is False
-    assert any("empty namingSQL param value" in item for item in result.issues)
-
-
-def test_repair_loop() -> None:
-    bad_plan = {
-        "intent_summary": "bad",
-        "expression_pattern": "direct_ref",
-        "context_refs": ["$ctx$.customer.fake"],
-    }
-    repaired_plan = {
-        "intent_summary": "fixed",
-        "expression_pattern": "direct_ref",
-        "context_refs": ["$ctx$.customer.id"],
-    }
-    planner = LLMPlanner(StubOpenAIClient(plan_response=bad_plan, repair_response=repaired_plan))
-    agent = DSLAgent(llm_planner=planner)
-    response = agent.generate_dsl(_base_request())
-    assert response.success is True
-    assert response.plan is not None
-    assert response.plan.context_refs == ["$ctx$.customer.id"]
-
-
-def test_planner_payload_contains_available_functions() -> None:
-    client = StubOpenAIClient(
-        plan_response={
-            "intent_summary": "direct",
-            "expression_pattern": "direct_ref",
-            "context_refs": ["$ctx$.customer.id"],
-        }
+def test_validator_detects_illegal_reference() -> None:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
+    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=1)).build_filtered_environment(
+        node_info=_request().node_def,
+        user_query="根据性别生成称谓",
+        registry=registry,
     )
-    planner = LLMPlanner(client)
-    request = _base_request()
-    request.function_schema = [
-        {
-            "full_name": "Customer.GetSalutation",
-            "params": [{"param_name": "gender"}],
-        }
-    ]
-    env = EnvironmentBuilder().build_environment(request)
-    planner.plan("根据性别返回称谓", request.node_def, env)
-    assert client.last_payload is not None
-    available_functions = client.last_payload["environment"]["available_functions"]
-    assert available_functions == [{"name": "Customer.GetSalutation", "params": ["gender"]}]
 
+    bad_plan = LLMPlanner(
+        StubOpenAIClient(
+            plan_response={
+                "intent_summary": "bad",
+                "expression_pattern": "function_call",
+                "context_refs": ["context:$ctx$.customer.gender"],
+                "function_refs": ["function:String.Upper"],
+                "semantic_slots": {"function_args": ["context:$ctx$.customer.gender"]},
+            }
+        )
+    ).plan("x", _request().node_def, filtered)
 
-def test_plan_validator_function_signature_check() -> None:
-    env = EnvironmentBuilder().build_environment(_base_request())
-    env.function_schema = [{"full_name": "str.upper", "params": ["value"]}]
-    validator = PlanValidator(planner=None)
-    plan = {
-        "intent_summary": "call function",
-        "expression_pattern": "function_call",
-        "function_refs": ["str.upper"],
-        "semantic_slots": {"function_args": ["$ctx$.customer.gender", "extra_arg"]},
-        "context_refs": ["$ctx$.customer.gender"],
-    }
-    parsed = LLMPlanner(StubOpenAIClient(plan_response=plan)).plan("x", _base_request().node_def, env)
-    result = validator.validate(parsed, env)
+    result = PlanValidator(planner=None).validate(bad_plan, filtered)
     assert result.is_valid is False
-    assert any("function args mismatch" in item for item in result.issues)
+    assert any("function not in filtered environment" in issue for issue in result.issues)

@@ -8,6 +8,8 @@ from billing_dsl_agent.environment import EnvironmentBuilder
 from billing_dsl_agent.llm_planner import LLMPlanner
 from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, ValidationResult
 from billing_dsl_agent.plan_validator import PlanValidator
+from billing_dsl_agent.resource_loader import ResourceLoader
+from billing_dsl_agent.resource_normalizer import ResourceNormalizer
 
 
 @dataclass(slots=True)
@@ -24,6 +26,8 @@ class FinalValidator:
 @dataclass(slots=True)
 class DSLAgent:
     llm_planner: LLMPlanner
+    resource_loader: ResourceLoader
+    resource_normalizer: ResourceNormalizer = field(default_factory=ResourceNormalizer)
     environment_builder: EnvironmentBuilder = field(default_factory=EnvironmentBuilder)
     plan_validator: PlanValidator | None = None
     ast_builder: ASTBuilder = field(default_factory=ASTBuilder)
@@ -35,9 +39,15 @@ class DSLAgent:
             self.plan_validator = PlanValidator(planner=self.llm_planner)
 
     def generate_dsl(self, request: GenerateDSLRequest) -> GenerateDSLResponse:
-        env = self.environment_builder.build_environment(request)
-        plan = self.llm_planner.plan(request.user_requirement, request.node_def, env)
-        plan_validation = self.plan_validator.validate(plan, env)
+        loaded = self.resource_loader.load(request.site_id, request.project_id)
+        registry = self.resource_normalizer.normalize(loaded)
+        filtered_env = self.environment_builder.build_filtered_environment(
+            node_info=request.node_def,
+            user_query=request.user_requirement,
+            registry=registry,
+        )
+        plan = self.llm_planner.plan(request.user_requirement, request.node_def, filtered_env)
+        plan_validation = self.plan_validator.validate(plan, filtered_env)
         if not plan_validation.is_valid:
             return GenerateDSLResponse(
                 success=False,
@@ -47,7 +57,7 @@ class DSLAgent:
             )
 
         valid_plan = plan_validation.repaired_plan or plan
-        ast = self.ast_builder.build_ast(valid_plan)
+        ast = self.ast_builder.build_ast(valid_plan, filtered_env)
         dsl = self.dsl_renderer.render(ast)
         final_validation = self.final_validator.validate(dsl)
         return GenerateDSLResponse(
@@ -58,7 +68,3 @@ class DSLAgent:
             validation=final_validation,
             failure_reason="" if final_validation.is_valid else "final validation failed",
         )
-
-
-def generate_dsl(request: GenerateDSLRequest, planner: LLMPlanner) -> GenerateDSLResponse:
-    return DSLAgent(llm_planner=planner).generate_dsl(request)
