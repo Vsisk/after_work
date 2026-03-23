@@ -54,10 +54,11 @@ class ExpressionAgent:
             node_info=request.node_info,
             environment=environment,
         )
+        planning_environment = self.resource_manager.narrow_environment(environment, candidate_set)
         plan = self.llm_planner.plan(request.user_query, request.node_info, candidate_set)
 
         assert self.plan_validator is not None
-        validation = self.plan_validator.validate(plan, environment)
+        validation = self.plan_validator.validate(plan, planning_environment)
         if not validation.is_valid:
             return GenerateExpressionResponse(
                 success=False,

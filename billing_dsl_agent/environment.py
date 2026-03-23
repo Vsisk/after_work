@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from billing_dsl_agent.bo_models import BODef
 from billing_dsl_agent.bo_models import BORegistry
 from billing_dsl_agent.context_loader import build_context_path_map
 from billing_dsl_agent.context_models import ContextRegistry
@@ -34,6 +35,30 @@ class Environment:
     @property
     def function_schema(self) -> List[Dict[str, Any]]:
         return list(self.function_registry.functions)
+
+    def filtered_by_candidates(self, candidate_set: Any) -> "Environment":
+        context_paths = {str(getattr(item, "path", "")) for item in list(getattr(candidate_set, "context_candidates", []) or [])}
+        bo_names = {str(getattr(item, "bo_name", "")) for item in list(getattr(candidate_set, "bo_candidates", []) or [])}
+        function_names = {
+            str(getattr(item, "full_name", "") or getattr(item, "name", ""))
+            for item in list(getattr(candidate_set, "function_candidates", []) or [])
+        }
+
+        all_bos: List[BODef] = [bo for bo in self.bo_registry.all_bos() if bo.bo_name in bo_names]
+        filtered_functions = [
+            fn
+            for fn in self.function_registry.functions
+            if str(fn.get("full_name") or fn.get("name") or "") in function_names
+        ]
+
+        return Environment(
+            node_info=dict(self.node_info),
+            node_path=self.node_path,
+            visible_global_context=[path for path in self.visible_global_context if path in context_paths],
+            visible_local_context=[path for path in self.visible_local_context if path in context_paths],
+            bo_registry=BORegistry(system_bos=list(all_bos), custom_bos=[]),
+            function_registry=FunctionRegistry(functions=filtered_functions),
+        )
 
 
 class NodeContextResolver:

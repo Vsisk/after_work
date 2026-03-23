@@ -254,6 +254,11 @@ class ResourceManager:
             ],
         }
 
+    def narrow_environment(self, environment: Any, candidate_set: CandidateSet) -> Any:
+        if hasattr(environment, "filtered_by_candidates"):
+            return environment.filtered_by_candidates(candidate_set)
+        return environment
+
     def build_candidate_prompt_payload(
         self,
         user_query: str,
