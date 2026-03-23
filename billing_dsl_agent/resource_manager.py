@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from billing_dsl_agent.resource_models import (
@@ -79,6 +81,58 @@ class ResourceManager:
             function_by_full_name=function_by_full_name,
             function_by_name=dict(function_by_name),
         )
+
+    def normalize_functions(self, function_payload: Dict[str, Any]) -> Dict[str, Any]:
+        version = str(function_payload.get("version", ""))
+        normalized: List[Dict[str, Any]] = []
+
+        for source_key, source_type in (("native_func", "native"), ("func", "custom")):
+            class_rows = function_payload.get(source_key) or []
+            if not isinstance(class_rows, list):
+                continue
+            for class_row in class_rows:
+                if not isinstance(class_row, dict):
+                    continue
+                class_name = self._safe_text(class_row.get("class_name"))
+                class_desc = self._safe_text(class_row.get("class_desc"))
+                func_list = class_row.get("func_list") or []
+                if not isinstance(func_list, list):
+                    continue
+                for func_row in func_list:
+                    if not isinstance(func_row, dict):
+                        continue
+                    func_name = self._safe_text(func_row.get("func_name"))
+                    if not func_name:
+                        continue
+                    func_id = self._safe_text(func_row.get("func_id"))
+                    full_name = f"{class_name}.{func_name}" if class_name else func_name
+                    normalized.append(
+                        {
+                            "id": func_id or full_name,
+                            "name": func_name,
+                            "full_name": full_name,
+                            "class_name": class_name,
+                            "class_desc": class_desc,
+                            "description": self._safe_text(func_row.get("func_desc")) or class_desc,
+                            "scope": self._safe_text(func_row.get("func_scope")) or ("global" if source_type == "native" else "custom"),
+                            "source_type": source_type,
+                            "shared_object": self._safe_text(func_row.get("func_so")),
+                            "expression_type": self._safe_text((func_row.get("func_content") or {}).get("expression_type")),
+                            "expression": self._safe_text((func_row.get("func_content") or {}).get("expression")),
+                            "cdsl": self._safe_text((func_row.get("func_content") or {}).get("cdsl")),
+                            "params": self._normalize_param_list(func_row.get("param_list")),
+                            "return_type": self._normalize_return_type(func_row.get("return_type")),
+                        }
+                    )
+
+        return {"version": version, "functions": normalized}
+
+    def normalize_functions_to_file(self, function_payload: Dict[str, Any], output_path: str) -> Dict[str, Any]:
+        normalized = self.normalize_functions(function_payload)
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+        return normalized
 
     def select_candidates(
         self,
@@ -452,6 +506,38 @@ class ResourceManager:
             return [value for value in values if value]
         return []
 
+    def _normalize_param_list(self, raw_params: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_params, list):
+            return []
+        params: List[Dict[str, Any]] = []
+        for idx, row in enumerate(raw_params):
+            if not isinstance(row, dict):
+                continue
+            param_name = self._safe_text(row.get("param_name")) or f"param_{idx}"
+            params.append(
+                {
+                    "param_name": param_name,
+                    "data_type": self._safe_text(row.get("data_type")),
+                    "data_type_name": self._safe_text(row.get("data_type_name")),
+                    "is_list": bool(row.get("is_list", False)),
+                    "is_output": bool(row.get("is_output", False)),
+                }
+            )
+        return params
+
+    def _normalize_return_type(self, return_type: Any) -> Dict[str, Any]:
+        if not isinstance(return_type, dict):
+            return {
+                "data_type": "",
+                "data_type_name": "",
+                "is_list": False,
+            }
+        return {
+            "data_type": self._safe_text(return_type.get("data_type")),
+            "data_type_name": self._safe_text(return_type.get("data_type_name")),
+            "is_list": bool(return_type.get("is_list", False)),
+        }
+
     def _first_text(self, item: Any, *keys: str) -> str:
         value = self._first_non_none(item, *keys)
         if isinstance(value, str):
@@ -476,6 +562,9 @@ class ResourceManager:
         if not isinstance(value, str):
             return ""
         return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", value.lower())
+
+    def _safe_text(self, value: Any) -> str:
+        return value if isinstance(value, str) else ""
 
 
 def build_candidate_prompt_payload(

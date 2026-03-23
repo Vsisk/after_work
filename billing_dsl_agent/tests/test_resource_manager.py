@@ -133,3 +133,72 @@ def test_format_for_prompt() -> None:
     assert {"path", "name", "description"}.issubset(payload["context_candidates"][0].keys())
     assert {"bo_name", "description", "fields", "naming_sqls"}.issubset(payload["bo_candidates"][0].keys())
     assert {"name", "description", "params"}.issubset(payload["function_candidates"][0].keys())
+
+
+def test_normalize_functions_and_save(tmp_path) -> None:
+    manager = ResourceManager()
+    function_payload = {
+        "version": "1.0.0",
+        "native_func": [
+            {
+                "class_name": "UserManager",
+                "class_desc": "用户管理模块",
+                "func_list": [
+                    {
+                        "func_id": "get_user_by_id",
+                        "func_name": "getUserById",
+                        "func_desc": "根据ID获取用户信息",
+                        "func_so": "/lib/user_manager.so",
+                        "func_scope": "global",
+                        "param_list": [
+                            {
+                                "is_list": False,
+                                "data_type": "basic",
+                                "data_type_name": "int",
+                                "param_name": "userId",
+                                "is_output": False,
+                            }
+                        ],
+                        "return_type": {"is_list": False, "data_type": "bo", "data_type_name": "UserBO"},
+                    }
+                ],
+            }
+        ],
+        "func": [
+            {
+                "class_name": "ContractAnalyzer",
+                "class_desc": "合同分析工具类",
+                "func_list": [
+                    {
+                        "func_name": "analyzePaymentTerms",
+                        "func_desc": "分析合同中的付款条件",
+                        "func_content": {
+                            "expression_type": "edsl_expression",
+                            "expression": "contract.paymentTerms.extract()",
+                        },
+                        "func_scope": "custom",
+                        "param_list": [
+                            {
+                                "is_list": False,
+                                "data_type": "bo",
+                                "data_type_name": "ContractBO",
+                                "param_name": "contract",
+                                "is_output": False,
+                            }
+                        ],
+                        "return_type": {"is_list": True, "data_type": "logic", "data_type_name": "PaymentTerm"},
+                    }
+                ],
+            }
+        ],
+    }
+    output_path = tmp_path / "normalized_functions.json"
+    normalized = manager.normalize_functions_to_file(function_payload, str(output_path))
+
+    assert normalized["version"] == "1.0.0"
+    assert len(normalized["functions"]) == 2
+    assert normalized["functions"][0]["full_name"] == "UserManager.getUserById"
+    assert normalized["functions"][0]["shared_object"] == "/lib/user_manager.so"
+    assert normalized["functions"][1]["full_name"] == "ContractAnalyzer.analyzePaymentTerms"
+    assert normalized["functions"][1]["expression_type"] == "edsl_expression"
+    assert output_path.exists()
