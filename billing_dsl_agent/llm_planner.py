@@ -17,8 +17,10 @@ class OpenAIClient(Protocol):
 class StubOpenAIClient:
     plan_response: Optional[Dict[str, Any]] = None
     repair_response: Optional[Dict[str, Any]] = None
+    last_payload: Optional[Dict[str, Any]] = None
 
     def create_plan(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        self.last_payload = payload
         if payload.get("mode") == "repair":
             return self.repair_response
         return self.plan_response
@@ -44,6 +46,7 @@ class LLMPlanner:
                 "context_paths": env.context_paths,
                 "bo_schema": env.bo_schema,
                 "function_schema": env.function_schema,
+                "available_functions": self._available_functions(env.function_schema),
             },
         }
         raw = self.client.create_plan(payload)
@@ -61,6 +64,7 @@ class LLMPlanner:
                 "context_paths": env.context_paths,
                 "bo_schema": env.bo_schema,
                 "function_schema": env.function_schema,
+                "available_functions": self._available_functions(env.function_schema),
             },
         }
         raw = self.client.create_plan(payload)
@@ -99,3 +103,29 @@ class LLMPlanner:
             semantic_slots=dict(data.get("semantic_slots") or {}),
             raw_plan=dict(data.get("raw_plan") or data),
         )
+
+    def _available_functions(self, function_schema: list[Any]) -> list[Dict[str, Any]]:
+        available: list[Dict[str, Any]] = []
+        for item in function_schema:
+            if isinstance(item, str):
+                available.append({"name": item, "params": []})
+                continue
+            if not isinstance(item, dict):
+                continue
+            full_name = str(item.get("full_name") or item.get("name") or "").strip()
+            if not full_name:
+                continue
+            params = item.get("params") or item.get("param_list") or []
+            if isinstance(params, list):
+                parsed_params: list[str] = []
+                for p in params:
+                    if isinstance(p, str):
+                        parsed_params.append(p)
+                    elif isinstance(p, dict):
+                        param_name = str(p.get("param_name") or p.get("name") or "").strip()
+                        if param_name:
+                            parsed_params.append(param_name)
+                available.append({"name": full_name, "params": parsed_params})
+            else:
+                available.append({"name": full_name, "params": []})
+        return available

@@ -149,3 +149,43 @@ def test_repair_loop() -> None:
     assert response.success is True
     assert response.plan is not None
     assert response.plan.context_refs == ["$ctx$.customer.id"]
+
+
+def test_planner_payload_contains_available_functions() -> None:
+    client = StubOpenAIClient(
+        plan_response={
+            "intent_summary": "direct",
+            "expression_pattern": "direct_ref",
+            "context_refs": ["$ctx$.customer.id"],
+        }
+    )
+    planner = LLMPlanner(client)
+    request = _base_request()
+    request.function_schema = [
+        {
+            "full_name": "Customer.GetSalutation",
+            "params": [{"param_name": "gender"}],
+        }
+    ]
+    env = EnvironmentBuilder().build_environment(request)
+    planner.plan("根据性别返回称谓", request.node_def, env)
+    assert client.last_payload is not None
+    available_functions = client.last_payload["environment"]["available_functions"]
+    assert available_functions == [{"name": "Customer.GetSalutation", "params": ["gender"]}]
+
+
+def test_plan_validator_function_signature_check() -> None:
+    env = EnvironmentBuilder().build_environment(_base_request())
+    env.function_schema = [{"full_name": "str.upper", "params": ["value"]}]
+    validator = PlanValidator(planner=None)
+    plan = {
+        "intent_summary": "call function",
+        "expression_pattern": "function_call",
+        "function_refs": ["str.upper"],
+        "semantic_slots": {"function_args": ["$ctx$.customer.gender", "extra_arg"]},
+        "context_refs": ["$ctx$.customer.gender"],
+    }
+    parsed = LLMPlanner(StubOpenAIClient(plan_response=plan)).plan("x", _base_request().node_def, env)
+    result = validator.validate(parsed, env)
+    assert result.is_valid is False
+    assert any("function args mismatch" in item for item in result.issues)

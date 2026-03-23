@@ -18,7 +18,7 @@ class NodeDef:
 class Environment:
     context_paths: List[str] = field(default_factory=list)
     bo_schema: Dict[str, List[str]] = field(default_factory=dict)
-    function_schema: List[str] = field(default_factory=list)
+    function_schema: List[Any] = field(default_factory=list)
     node_schema: Dict[str, Any] = field(default_factory=dict)
     context_schema: Dict[str, Any] = field(default_factory=dict)
 
@@ -74,7 +74,7 @@ class GenerateDSLRequest:
     node_def: NodeDef
     context_schema: Dict[str, Any] = field(default_factory=dict)
     bo_schema: Dict[str, List[str]] = field(default_factory=dict)
-    function_schema: List[str] = field(default_factory=list)
+    function_schema: List[Any] = field(default_factory=list)
 
 
 @dataclass(slots=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any, Dict
 from typing import Optional
 
 from billing_dsl_agent.llm_planner import LLMPlanner
@@ -39,6 +40,7 @@ class PlanValidator:
 
     def _collect_issues(self, plan: PlanDraft, env: Environment) -> list[str]:
         issues: list[str] = []
+        function_catalog = self._build_function_catalog(env.function_schema)
         if plan.expression_pattern not in self.ALLOWED_PATTERNS:
             issues.append(f"unsupported expression_pattern: {plan.expression_pattern}")
 
@@ -73,7 +75,36 @@ class PlanValidator:
                     issues.append(f"fake context path in param: {value}")
 
         for fn_name in plan.function_refs:
-            if fn_name not in env.function_schema:
+            if fn_name not in function_catalog:
                 issues.append(f"unknown function: {fn_name}")
+                continue
+            expected = function_catalog.get(fn_name, [])
+            actual_args = plan.semantic_slots.get("function_args") or []
+            if isinstance(actual_args, list) and expected and len(actual_args) != len(expected):
+                issues.append(f"function args mismatch: {fn_name} expected {len(expected)} got {len(actual_args)}")
 
         return issues
+
+    def _build_function_catalog(self, function_schema: list[Any]) -> Dict[str, list[str]]:
+        catalog: Dict[str, list[str]] = {}
+        for item in function_schema:
+            if isinstance(item, str):
+                catalog[item] = []
+                continue
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("full_name") or item.get("name") or "").strip()
+            if not name:
+                continue
+            params = item.get("params") or item.get("param_list") or []
+            parsed_params: list[str] = []
+            if isinstance(params, list):
+                for p in params:
+                    if isinstance(p, str):
+                        parsed_params.append(p)
+                    elif isinstance(p, dict):
+                        param_name = str(p.get("param_name") or p.get("name") or "").strip()
+                        if param_name:
+                            parsed_params.append(param_name)
+            catalog[name] = parsed_params
+        return catalog
