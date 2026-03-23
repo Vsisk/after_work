@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from billing_dsl_agent.llm_planner import LLMPlanner
-from billing_dsl_agent.models import Environment, PlanDraft, ValidationResult
+from billing_dsl_agent.models import PlanDraft, ValidationResult
 
 
 class PlanValidator:
@@ -23,7 +22,7 @@ class PlanValidator:
         self.planner = planner
         self.max_retries = max_retries
 
-    def validate(self, plan: PlanDraft, env: Environment) -> ValidationResult:
+    def validate(self, plan: PlanDraft, env: Any) -> ValidationResult:
         current = plan
         attempts = 0
         while True:
@@ -38,29 +37,32 @@ class PlanValidator:
             current = repaired
             attempts += 1
 
-    def _collect_issues(self, plan: PlanDraft, env: Environment) -> list[str]:
+    def _collect_issues(self, plan: PlanDraft, env: Any) -> list[str]:
         issues: list[str] = []
-        function_catalog = self._build_function_catalog(env.function_schema)
+        context_paths = set(list(getattr(env, "context_paths", []) or []))
+        bo_schema = dict(getattr(env, "bo_schema", {}) or {})
+        function_catalog = self._build_function_catalog(list(getattr(env, "function_schema", []) or []))
+
         if plan.expression_pattern not in self.ALLOWED_PATTERNS:
             issues.append(f"unsupported expression_pattern: {plan.expression_pattern}")
 
         for ctx in plan.context_refs:
-            if ctx not in env.context_paths:
+            if ctx not in context_paths:
                 issues.append(f"fake context path: {ctx}")
 
         for ref in plan.bo_refs:
             bo_name = str(ref.get("bo_name") or "").strip()
-            if not bo_name or bo_name not in env.bo_schema:
+            if not bo_name or bo_name not in bo_schema:
                 issues.append(f"unknown bo: {bo_name or '<empty>'}")
                 continue
 
             field = str(ref.get("field") or ref.get("target_field") or "").strip()
-            if field and field not in env.bo_schema.get(bo_name, []):
+            if field and field not in bo_schema.get(bo_name, []):
                 issues.append(f"unknown bo field: {bo_name}.{field}")
 
             for selected in ref.get("selected_fields") or ref.get("selected_field_names") or []:
                 s = str(selected).strip()
-                if s and s not in env.bo_schema.get(bo_name, []):
+                if s and s not in bo_schema.get(bo_name, []):
                     issues.append(f"unknown bo field: {bo_name}.{s}")
 
             for param in ref.get("params") or []:
@@ -71,7 +73,7 @@ class PlanValidator:
                 source_type = str(param.get("value_source_type") or "").strip()
                 if source_type not in self.ALLOWED_PARAM_SOURCE:
                     issues.append(f"invalid value_source_type: {source_type}")
-                if source_type == "context" and value not in env.context_paths:
+                if source_type == "context" and value not in context_paths:
                     issues.append(f"fake context path in param: {value}")
 
         for fn_name in plan.function_refs:

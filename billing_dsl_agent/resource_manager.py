@@ -180,6 +180,55 @@ class ResourceManager:
         )
         return candidate_set
 
+
+    def select_candidates_for_environment(
+        self,
+        user_query: str,
+        node_info: Any,
+        environment: Any,
+        budget: Optional[dict] = None,
+    ) -> CandidateSet:
+        context_rows = [
+            {"path": path, "name": path.split(".")[-1], "description": ""}
+            for path in list(getattr(environment, "context_paths", []) or [])
+        ]
+
+        bo_rows: List[Dict[str, Any]] = []
+        bo_registry = getattr(environment, "bo_registry", None)
+        if bo_registry is not None and hasattr(bo_registry, "all_bos"):
+            for bo in bo_registry.all_bos():
+                bo_rows.append(
+                    {
+                        "bo_name": getattr(bo, "bo_name", ""),
+                        "description": getattr(bo, "description", ""),
+                        "fields": [getattr(field, "name", "") for field in getattr(bo, "fields", [])],
+                        "naming_sqls": [
+                            getattr(sql, "name", "")
+                            for sql in getattr(getattr(bo, "query_capability", None), "naming_sqls", [])
+                        ],
+                    }
+                )
+        else:
+            for bo_name, fields in dict(getattr(environment, "bo_schema", {}) or {}).items():
+                bo_rows.append({"bo_name": bo_name, "fields": list(fields), "description": "", "naming_sqls": []})
+
+        function_registry = getattr(environment, "function_registry", None)
+        function_rows = list(getattr(function_registry, "functions", []) or list(getattr(environment, "function_schema", []) or []))
+
+        indexes = self.build_indexes(
+            context_registry_or_vars=context_rows,
+            bo_registry_or_list=bo_rows,
+            function_registry_or_list=function_rows,
+        )
+        candidate_set = self.select_candidates(
+            user_query=user_query,
+            node_def=node_info,
+            indexes=indexes,
+            budget=budget,
+        )
+        candidate_set.selection_trace.append("[budget] applied candidate truncation")
+        return candidate_set
+
     def format_for_prompt(self, candidate_set: CandidateSet) -> Dict[str, Any]:
         return {
             "context_candidates": [
