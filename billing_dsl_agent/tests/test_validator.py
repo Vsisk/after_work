@@ -1,8 +1,8 @@
 from billing_dsl_agent.services.validator import DefaultValidator
 from billing_dsl_agent.types.common import GeneratedDSL, MethodDef
 from billing_dsl_agent.types.node import NodeDef
-from billing_dsl_agent.types.request_response import GenerateDSLRequest
 from billing_dsl_agent.types.plan import ResolvedEnvironment
+from billing_dsl_agent.types.request_response import GenerateDSLRequest
 from billing_dsl_agent.types.validation import ValidationErrorCode
 
 
@@ -45,3 +45,23 @@ def test_validator_reports_unknown_method_ref() -> None:
 
     assert result.is_valid is False
     assert any(issue.code == ValidationErrorCode.UNKNOWN_METHOD_REF for issue in result.issues)
+
+
+def test_validator_reports_invalid_if_shape() -> None:
+    validator = DefaultValidator()
+    generated = GeneratedDSL(methods=[], value_expression='if($ctx$.customer.gender == "男", "MR.")')
+
+    result = validator.validate(generated, _dummy_request(), ResolvedEnvironment())
+
+    assert result.is_valid is False
+    assert any("IF expression requires exactly 3 arguments." in issue.message for issue in result.issues)
+
+
+def test_validator_reports_invalid_binary_shape() -> None:
+    validator = DefaultValidator()
+    generated = GeneratedDSL(methods=[], value_expression='if($ctx$.customer.gender ==, "MR.", "Ms.")')
+
+    result = validator.validate(generated, _dummy_request(), ResolvedEnvironment())
+
+    assert result.is_valid is False
+    assert any("Binary expression requires both left and right operands." in issue.message for issue in result.issues)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from .agent import PlanDraft
 from .bo import BODef
 from .common import GeneratedDSL, StructuredExplanation
 from .context import ContextVarDef
@@ -35,6 +36,7 @@ class GenerateDSLResponse:
 
     success: bool
     dsl_code: str = ""
+    plan_draft: Optional[PlanDraft] = None
     generated_dsl: Optional[GeneratedDSL] = None
     intent: Optional[NodeIntent] = None
     resolved_environment: Optional[ResolvedEnvironment] = None

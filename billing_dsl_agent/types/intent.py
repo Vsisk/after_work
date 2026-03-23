@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import Any, Dict, List
 
 from .common import DSLDataType
 
@@ -43,3 +43,4 @@ class NodeIntent:
     source_types: List[IntentSourceType] = field(default_factory=list)
     operations: List[OperationIntent] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
+    semantic_slots: Dict[str, Any] = field(default_factory=dict)

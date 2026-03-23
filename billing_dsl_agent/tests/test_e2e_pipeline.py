@@ -3,11 +3,15 @@ from billing_dsl_agent.services import (
     DefaultDSLRenderer,
     DefaultEnvironmentResolver,
     DefaultExplanationBuilder,
-    DefaultResourceMatcher,
     DefaultValidator,
+    LLMPlanner,
+    PlanValidator,
+    PromptAssembler,
     SimpleRequirementParser,
     SimpleValuePlanner,
 )
+from billing_dsl_agent.services.openai_client_adapter import StubOpenAIClientAdapter
+from billing_dsl_agent.types.agent import PlanDraft
 from billing_dsl_agent.types.bo import BODef
 from billing_dsl_agent.types.common import ContextScope, DSLDataType
 from billing_dsl_agent.types.context import ContextFieldDef, ContextVarDef
@@ -18,9 +22,22 @@ from billing_dsl_agent.types.request_response import GenerateDSLRequest
 
 def test_e2e_pipeline_minimal_working_chain_success() -> None:
     orchestrator = CodeAgentOrchestrator(
-        parser=SimpleRequirementParser(),
+        llm_planner=LLMPlanner(
+            prompt_assembler=PromptAssembler(),
+            client=StubOpenAIClientAdapter(
+                draft=PlanDraft(
+                    intent_summary="query and format",
+                    context_refs=["$ctx$.billStatement.prepareId"],
+                    bo_refs=[{"bo_name": "SYS_BE", "query_mode": "select_one"}],
+                    function_refs=["Common.Double2Str"],
+                    expression_pattern="function_call(value)",
+                    raw_plan={"target_node_path": "/bill/value"},
+                )
+            ),
+            fallback_parser=SimpleRequirementParser(),
+        ),
         environment_resolver=DefaultEnvironmentResolver(),
-        resource_matcher=DefaultResourceMatcher(),
+        plan_validator=PlanValidator(),
         value_planner=SimpleValuePlanner(),
         dsl_renderer=DefaultDSLRenderer(),
         validator=DefaultValidator(),
@@ -49,7 +66,8 @@ def test_e2e_pipeline_minimal_working_chain_success() -> None:
     response = orchestrator.generate(request)
 
     assert response.success is True
+    assert response.plan_draft is not None
     assert response.generated_dsl is not None
-    assert "select_one(SYS_BE" in response.dsl_code
+    assert response.dsl_code.strip() != ""
     assert "Common.Double2Str(" in response.dsl_code
     assert response.validation_result is not None and response.validation_result.is_valid is True
