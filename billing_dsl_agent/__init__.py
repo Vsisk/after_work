@@ -9,6 +9,7 @@ from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
 from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, NodeDef
 from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
 from billing_dsl_agent.resource_manager import ResourceManager, build_candidate_prompt_payload
+from billing_dsl_agent.semantic_selector import MockSemanticSelector, OpenAISemanticSelector
 
 __all__ = [
     "DSLAgent",
@@ -26,4 +27,6 @@ __all__ = [
     "build_context_path_map",
     "InMemoryResourceProvider",
     "ResourceLoader",
+    "MockSemanticSelector",
+    "OpenAISemanticSelector",
 ]
