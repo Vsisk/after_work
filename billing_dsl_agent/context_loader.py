@@ -9,7 +9,7 @@ from billing_dsl_agent.context_models import ContextPropertyDef, ContextRegistry
 
 def load_context_registry_from_json(data: Dict[str, Any]) -> ContextRegistry:
     payload = data if isinstance(data, dict) else {}
-    global_root = _normalize_node(payload.get("global_context"))
+    global_root = _normalize_node(_resolve_global_context(payload.get("global_context")))
     if global_root is None:
         global_root = ContextPropertyDef(
             id="",
@@ -31,6 +31,38 @@ def load_context_registry_from_json(data: Dict[str, Any]) -> ContextRegistry:
         local_roots=sub_global_nodes,
         metadata={"version": _as_text(payload.get("version"))},
     )
+
+
+def _resolve_global_context(raw_global: Any) -> Dict[str, Any]:
+    if not isinstance(raw_global, dict):
+        return {}
+
+    if "custom_context" not in raw_global and "system_context" not in raw_global:
+        return raw_global
+
+    custom_context = raw_global.get("custom_context")
+    system_context = raw_global.get("system_context")
+    custom_payload = custom_context if isinstance(custom_context, dict) else {}
+    system_payload = system_context if isinstance(system_context, dict) else {}
+
+    merged_sub_properties: List[Dict[str, Any]] = []
+    for item in custom_payload.get("sub_properties") or []:
+        if isinstance(item, dict):
+            merged_sub_properties.append(item)
+    for item in system_payload.get("sub_properties") or []:
+        if isinstance(item, dict):
+            merged_sub_properties.append(item)
+
+    base = custom_payload or system_payload
+    return {
+        "property_id": base.get("property_id"),
+        "property_name": base.get("property_name"),
+        "property_type": base.get("property_type"),
+        "annotation": base.get("annotation"),
+        "allow_modify": base.get("allow_modify", False),
+        "value_source_type": "sub_property_wise",
+        "sub_properties": merged_sub_properties,
+    }
 
 
 def load_context_registry_from_file(path: str) -> ContextRegistry:

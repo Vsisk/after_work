@@ -142,3 +142,42 @@ def test_load_context_registry_missing_optional_fields() -> None:
     assert child_sql.metadata["sql_query"]["sql_conditions"] == []
     child_cdsl = registry.global_root.children[1]
     assert child_cdsl.metadata["cdsl"] == ""
+
+
+def test_load_context_registry_nested_custom_and_system_context() -> None:
+    payload = {
+        "global_context": {
+            "custom_context": {
+                "property_id": "root_custom",
+                "property_name": "$ctx$",
+                "annotation": "custom root",
+                "allow_modify": True,
+                "sub_properties": [
+                    {
+                        "property_id": "custom_child",
+                        "property_name": "customValue",
+                        "value_source_type": "cdsl",
+                    }
+                ],
+            },
+            "system_context": {
+                "property_id": "root_system",
+                "property_name": "$ctx$",
+                "annotation": "system root",
+                "allow_modify": True,
+                "sub_properties": [
+                    {
+                        "property_id": "system_child",
+                        "property_name": "systemValue",
+                        "value_source_type": "cdsl",
+                    }
+                ],
+            },
+        }
+    }
+
+    registry = load_context_registry_from_json(payload)
+    assert registry.global_root is not None
+    child_names = {child.name for child in registry.global_root.children}
+    assert "customValue" in child_names
+    assert "systemValue" in child_names
