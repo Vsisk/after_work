@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
-from billing_dsl_agent.models import FilteredEnvironment, NodeDef, PlanDraft
+from billing_dsl_agent.models import (
+    FilteredEnvironment,
+    LiteralPlanNode,
+    NodeDef,
+    PlanDiagnostic,
+    ProgramPlan,
+    ValidationIssue,
+)
+from billing_dsl_agent.plan_validator import parse_program_plan_payload
 
 
 class OpenAIClient(Protocol):
@@ -31,7 +38,7 @@ class LLMPlanner:
         self.client = client
         self.prompt_dir = Path(__file__).resolve().parent / "prompts"
 
-    def plan(self, user_requirement: str, node_def: NodeDef, env: FilteredEnvironment) -> PlanDraft:
+    def plan(self, user_requirement: str, node_def: NodeDef, env: FilteredEnvironment) -> ProgramPlan:
         payload = {
             "mode": "plan",
             "prompt": self._load_prompt("plan_prompt.txt"),
@@ -47,15 +54,30 @@ class LLMPlanner:
         }
         raw = self.client.create_plan(payload)
         if raw is None:
-            return PlanDraft(intent_summary="", expression_pattern="direct_ref", raw_plan={"fallback": True})
+            return ProgramPlan(
+                definitions=[],
+                return_expr=LiteralPlanNode(type="literal", value=None),
+                raw_plan={"fallback": True},
+                diagnostics=[
+                    PlanDiagnostic(
+                        code="planner_fallback",
+                        message="planner returned no result; fallback literal plan used",
+                    )
+                ],
+            )
         return self._parse_plan(raw)
 
-    def repair(self, invalid_plan: PlanDraft, env: FilteredEnvironment, issues: list[str]) -> Optional[PlanDraft]:
+    def repair(
+        self,
+        invalid_plan: ProgramPlan,
+        env: FilteredEnvironment,
+        issues: list[ValidationIssue],
+    ) -> Optional[ProgramPlan]:
         payload = {
             "mode": "repair",
             "prompt": self._load_prompt("repair_prompt.txt"),
-            "invalid_plan": invalid_plan.raw_plan or self._to_dict(invalid_plan),
-            "issues": issues,
+            "invalid_plan": invalid_plan.raw_plan or invalid_plan.model_dump(mode="python"),
+            "issues": [item.model_dump(mode="python") for item in issues],
             "environment": self._build_env_payload(env),
         }
         raw = self.client.create_plan(payload)
@@ -71,34 +93,23 @@ class LLMPlanner:
             "selected_function_ids": env.selected_function_ids,
         }
 
-    @staticmethod
-    def _to_dict(plan: PlanDraft) -> Dict[str, Any]:
-        return {
-            "intent_summary": plan.intent_summary,
-            "expression_pattern": plan.expression_pattern,
-            "context_refs": plan.context_refs,
-            "bo_refs": plan.bo_refs,
-            "function_refs": plan.function_refs,
-            "semantic_slots": plan.semantic_slots,
-            "raw_plan": plan.raw_plan,
-        }
-
     def _load_prompt(self, name: str) -> str:
         return (self.prompt_dir / name).read_text(encoding="utf-8").strip()
 
-    def _parse_plan(self, raw: Dict[str, Any]) -> PlanDraft:
-        data = dict(raw)
-        if isinstance(data.get("raw_plan"), str):
-            try:
-                data["raw_plan"] = json.loads(data["raw_plan"])
-            except json.JSONDecodeError:
-                data["raw_plan"] = {"raw": data["raw_plan"]}
-        return PlanDraft(
-            intent_summary=str(data.get("intent_summary") or ""),
-            expression_pattern=str(data.get("expression_pattern") or ""),
-            context_refs=[str(v) for v in data.get("context_refs") or []],
-            bo_refs=[dict(v) for v in data.get("bo_refs") or [] if isinstance(v, dict)],
-            function_refs=[str(v) for v in data.get("function_refs") or []],
-            semantic_slots=dict(data.get("semantic_slots") or {}),
-            raw_plan=dict(data.get("raw_plan") or data),
-        )
+    def _parse_plan(self, raw: Dict[str, Any]) -> ProgramPlan:
+        try:
+            return parse_program_plan_payload(raw)
+        except Exception as exc:
+            return ProgramPlan(
+                definitions=[],
+                return_expr=LiteralPlanNode(type="literal", value=None),
+                raw_plan=raw,
+                diagnostics=[
+                    PlanDiagnostic(
+                        code="plan_parse_error",
+                        message=str(exc),
+                        path="raw_plan",
+                        severity="error",
+                    )
+                ],
+            )

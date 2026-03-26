@@ -1,67 +1,146 @@
 from __future__ import annotations
 
-from billing_dsl_agent.models import ExprKind, ExprNode, FilteredEnvironment, PlanDraft
+from billing_dsl_agent.models import (
+    BinaryOpPlanNode,
+    ContextRefPlanNode,
+    ExprKind,
+    ExprNode,
+    FieldAccessPlanNode,
+    FilteredEnvironment,
+    FunctionCallPlanNode,
+    IfPlanNode,
+    IndexAccessPlanNode,
+    ListLiteralPlanNode,
+    LiteralPlanNode,
+    LocalRefPlanNode,
+    ProgramNode,
+    ProgramPlan,
+    QueryCallPlanNode,
+    ReturnNode,
+    UnaryOpPlanNode,
+    VarRefPlanNode,
+    VariableDefNode,
+)
 
 
 class ASTBuilder:
-    def build_ast(self, plan: PlanDraft, env: FilteredEnvironment) -> ExprNode:
-        pattern = plan.expression_pattern
+    def build_program_from_plan(self, plan: ProgramPlan, env: FilteredEnvironment) -> ProgramNode:
+        definitions = [
+            VariableDefNode(
+                name=definition.name,
+                expr=self.build_expr_from_plan(definition.expr, env),
+            )
+            for definition in plan.definitions
+            if definition.kind == "variable"
+        ]
+        return ProgramNode(
+            definitions=definitions,
+            return_node=ReturnNode(expr=self.build_expr_from_plan(plan.return_expr, env)),
+        )
+
+    def build_expr_from_plan(self, node, env: FilteredEnvironment) -> ExprNode:
         registry = env.registry
 
-        def context_path(context_id: str) -> str:
-            return registry.contexts[context_id].path
+        if isinstance(node, LiteralPlanNode):
+            return ExprNode(kind=ExprKind.LITERAL, value=node.value)
 
-        if pattern == "if":
-            cond_ref_id = str(plan.semantic_slots.get("condition_ref") or plan.context_refs[0])
-            cond = ExprNode(
-                kind=ExprKind.BINARY_OP,
-                value=str(plan.semantic_slots.get("condition_operator") or "=="),
-                children=[
-                    ExprNode(kind=ExprKind.CONTEXT_REF, value=context_path(cond_ref_id)),
-                    ExprNode(kind=ExprKind.LITERAL, value=plan.semantic_slots.get("condition_value")),
-                ],
-            )
+        if isinstance(node, ContextRefPlanNode):
+            return ExprNode(kind=ExprKind.CONTEXT_REF, value=node.path)
+
+        if isinstance(node, LocalRefPlanNode):
+            return ExprNode(kind=ExprKind.LOCAL_REF, value=node.path)
+
+        if isinstance(node, VarRefPlanNode):
+            return ExprNode(kind=ExprKind.VAR_REF, value=node.name)
+
+        if isinstance(node, FunctionCallPlanNode):
+            function_name = node.function_name or node.function_id or ""
+            if node.function_id and node.function_id in registry.functions:
+                function_name = registry.functions[node.function_id].full_name
             return ExprNode(
-                kind=ExprKind.IF_EXPR,
-                children=[
-                    cond,
-                    ExprNode(kind=ExprKind.LITERAL, value=plan.semantic_slots.get("true_output")),
-                    ExprNode(kind=ExprKind.LITERAL, value=plan.semantic_slots.get("false_output")),
-                ],
+                kind=ExprKind.FUNCTION_CALL,
+                value=function_name,
+                children=[self.build_expr_from_plan(argument, env) for argument in node.args],
+                metadata={"function_id": node.function_id},
             )
 
-        if pattern in {"select", "select_one", "fetch", "fetch_one"} and plan.bo_refs:
-            bo_ref = plan.bo_refs[0]
-            bo = registry.bos[str(bo_ref.get("bo_id") or "")]
-            field_id = str(bo_ref.get("field_id") or "")
-            target_field = field_id.split(":")[-1] if field_id else ""
+        if isinstance(node, QueryCallPlanNode):
+            source_name = node.source_name
+            if node.bo_id and node.bo_id in registry.bos:
+                source_name = registry.bos[node.bo_id].bo_name
             return ExprNode(
                 kind=ExprKind.QUERY_CALL,
-                value=bo.bo_name,
+                value=source_name,
                 metadata={
-                    "query_mode": pattern,
-                    "target_field": target_field,
-                    "params": list(bo_ref.get("params") or []),
+                    "query_kind": node.query_kind,
+                    "target_field": node.field,
+                    "bo_id": node.bo_id,
+                    "data_source": node.data_source,
+                    "naming_sql_id": node.naming_sql_id,
+                    "filters": [
+                        {
+                            "field": query_filter.field,
+                            "value": self.build_expr_from_plan(query_filter.value, env),
+                        }
+                        for query_filter in node.filters
+                    ],
                 },
             )
 
-        if pattern == "function_call" and plan.function_refs:
-            function = registry.functions[plan.function_refs[0]]
-            args: list[ExprNode] = []
-            for value in plan.semantic_slots.get("function_args", []):
-                if isinstance(value, str) and value in registry.contexts:
-                    args.append(ExprNode(kind=ExprKind.CONTEXT_REF, value=context_path(value)))
-                elif isinstance(value, str) and value.startswith("$ctx$."):
-                    args.append(ExprNode(kind=ExprKind.CONTEXT_REF, value=value))
-                else:
-                    args.append(ExprNode(kind=ExprKind.LITERAL, value=value))
-            return ExprNode(kind=ExprKind.FUNCTION_CALL, value=function.full_name, children=args)
+        if isinstance(node, IfPlanNode):
+            return ExprNode(
+                kind=ExprKind.IF_EXPR,
+                children=[
+                    self.build_expr_from_plan(node.condition, env),
+                    self.build_expr_from_plan(node.then_expr, env),
+                    self.build_expr_from_plan(node.else_expr, env),
+                ],
+            )
 
-        if plan.context_refs:
-            return ExprNode(kind=ExprKind.CONTEXT_REF, value=context_path(plan.context_refs[0]))
+        if isinstance(node, BinaryOpPlanNode):
+            return ExprNode(
+                kind=ExprKind.BINARY_OP,
+                value=node.operator,
+                children=[
+                    self.build_expr_from_plan(node.left, env),
+                    self.build_expr_from_plan(node.right, env),
+                ],
+            )
 
-        return ExprNode(kind=ExprKind.LITERAL, value=plan.semantic_slots.get("literal"))
+        if isinstance(node, UnaryOpPlanNode):
+            return ExprNode(
+                kind=ExprKind.UNARY_OP,
+                value=node.operator,
+                children=[self.build_expr_from_plan(node.operand, env)],
+            )
+
+        if isinstance(node, FieldAccessPlanNode):
+            return ExprNode(
+                kind=ExprKind.FIELD_ACCESS,
+                value=node.field,
+                children=[self.build_expr_from_plan(node.base, env)],
+            )
+
+        if isinstance(node, IndexAccessPlanNode):
+            return ExprNode(
+                kind=ExprKind.INDEX_ACCESS,
+                children=[
+                    self.build_expr_from_plan(node.base, env),
+                    self.build_expr_from_plan(node.index, env),
+                ],
+            )
+
+        if isinstance(node, ListLiteralPlanNode):
+            return ExprNode(
+                kind=ExprKind.LIST_LITERAL,
+                children=[self.build_expr_from_plan(item, env) for item in node.items],
+            )
+
+        raise TypeError(f"unsupported expr node: {type(node).__name__}")
+
+    def build_ast(self, plan: ProgramPlan, env: FilteredEnvironment) -> ProgramNode:
+        return self.build_program_from_plan(plan, env)
 
 
-def build_ast(plan: PlanDraft, env: FilteredEnvironment) -> ExprNode:
-    return ASTBuilder().build_ast(plan, env)
+def build_ast(plan: ProgramPlan, env: FilteredEnvironment) -> ProgramNode:
+    return ASTBuilder().build_program_from_plan(plan, env)

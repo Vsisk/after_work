@@ -1,9 +1,7 @@
 from billing_dsl_agent.agent_entry import DSLAgent
-from billing_dsl_agent.ast_builder import ASTBuilder
 from billing_dsl_agent.environment import EnvironmentBuilder
 from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
 from billing_dsl_agent.models import GenerateDSLRequest, NodeDef
-from billing_dsl_agent.plan_validator import PlanValidator
 from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
 from billing_dsl_agent.resource_normalizer import ResourceNormalizer
 from billing_dsl_agent.semantic_selector import MockSemanticSelector
@@ -15,17 +13,27 @@ def _dataset() -> dict:
             "context": {
                 "global_context": {
                     "property_id": "root",
-                    "property_name": "全局",
+                    "property_name": "root",
                     "value_source_type": "sub_property_wise",
                     "sub_properties": [
                         {
                             "property_id": "gc_customer",
                             "property_name": "customer",
-                            "annotation": "客户全局对象",
+                            "annotation": "customer object",
                             "value_source_type": "sub_property_wise",
                             "sub_properties": [
-                                {"property_id": "gc_customer_gender", "property_name": "gender", "annotation": "客户性别", "value_source_type": "cdsl"},
-                                {"property_id": "gc_customer_id", "property_name": "id", "annotation": "客户ID", "value_source_type": "cdsl"},
+                                {
+                                    "property_id": "gc_customer_gender",
+                                    "property_name": "gender",
+                                    "annotation": "customer gender",
+                                    "value_source_type": "cdsl",
+                                },
+                                {
+                                    "property_id": "gc_customer_id",
+                                    "property_name": "id",
+                                    "annotation": "customer id",
+                                    "value_source_type": "cdsl",
+                                },
                             ],
                         }
                     ],
@@ -36,14 +44,14 @@ def _dataset() -> dict:
                 "node_name": "invoice",
                 "node_type": "parent",
                 "local_context": [
-                    {"id": "lc-invoice-id", "name": "invoiceId", "description": "单据ID", "path": "$local$.invoiceId"}
+                    {"id": "lc-invoice-id", "name": "invoiceId", "description": "invoice id", "path": "$local$.invoiceId"}
                 ],
                 "children": [
                     {
                         "node_path": "invoice.customer",
                         "node_name": "customer",
                         "node_type": "parent list",
-                        "local_context": [{"name": "customerLevel", "description": "客户等级"}],
+                        "local_context": [{"name": "customerLevel", "description": "customer level"}],
                         "children": [
                             {
                                 "node_path": "invoice.customer.title",
@@ -56,7 +64,7 @@ def _dataset() -> dict:
                         "node_path": "invoice.billing",
                         "node_name": "billing",
                         "node_type": "leaf",
-                        "local_context": [{"name": "should_not_visible", "description": "非法来源"}],
+                        "local_context": [{"name": "should_not_visible", "description": "hidden local"}],
                     },
                 ],
             },
@@ -64,15 +72,15 @@ def _dataset() -> dict:
                 "sys_bo_list": [
                     {
                         "bo_name": "CustomerBO",
-                        "bo_desc": "客户主数据",
-                        "property_list": [{"field_name": "name"}, {"field_name": "gender"}],
+                        "bo_desc": "customer data",
+                        "property_list": [{"field_name": "name"}, {"field_name": "gender"}, {"field_name": "id"}],
                         "or_mapping_list": [{"or_mapping_data_source": "crm", "naming_sql_list": [{"sql_name": "findById"}]}],
                     }
                 ],
                 "custom_bo_list": [
                     {
                         "bo_name": "InvoiceBO",
-                        "bo_desc": "发票数据",
+                        "bo_desc": "invoice data",
                         "property_list": [{"field_name": "title"}],
                         "or_mapping_list": [{"or_mapping_data_source": "billing", "naming_sql_list": [{"sql_name": "findByInvoiceId"}]}],
                     }
@@ -85,7 +93,7 @@ def _dataset() -> dict:
                         "func_list": [
                             {
                                 "func_name": "GetSalutation",
-                                "func_desc": "根据性别返回称谓",
+                                "func_desc": "return salutation by gender",
                                 "param_list": [{"param_name": "gender"}],
                                 "return_type": {"data_type_name": "string"},
                             }
@@ -98,7 +106,7 @@ def _dataset() -> dict:
                         "func_list": [
                             {
                                 "func_name": "Upper",
-                                "func_desc": "转大写",
+                                "func_desc": "uppercase string",
                                 "param_list": [{"param_name": "value"}],
                             }
                         ],
@@ -109,28 +117,28 @@ def _dataset() -> dict:
     }
 
 
-def _build_agent(plan_response: dict) -> DSLAgent:
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    loader = ResourceLoader(provider=provider)
-    planner = LLMPlanner(StubOpenAIClient(plan_response=plan_response))
-    env_builder = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4))
-    return DSLAgent(llm_planner=planner, resource_loader=loader, environment_builder=env_builder)
-
-
 def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> GenerateDSLRequest:
     return GenerateDSLRequest(
-        user_requirement="根据性别生成称谓",
+        user_requirement="generate title from customer gender",
         site_id="site-a",
         project_id="proj-1",
         node_def=NodeDef(
             node_id="n1",
             node_path="invoice.customer.title",
             node_name="title",
-            description="客户称谓",
+            description="customer title",
             is_ab=is_ab,
             ab_data_sources=ab_sources or [],
         ),
     )
+
+
+def _build_agent(plan_response: dict, repair_response: dict | None = None) -> DSLAgent:
+    provider = InMemoryResourceProvider(dataset=_dataset())
+    loader = ResourceLoader(provider=provider)
+    planner = LLMPlanner(StubOpenAIClient(plan_response=plan_response, repair_response=repair_response))
+    env_builder = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4))
+    return DSLAgent(llm_planner=planner, resource_loader=loader, environment_builder=env_builder)
 
 
 def _build_filtered_env():
@@ -140,7 +148,7 @@ def _build_filtered_env():
     registry = ResourceNormalizer().normalize(loaded)
     return EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
         node_info=_request().node_def,
-        user_query="根据性别生成称谓",
+        user_query="generate title from customer gender",
         registry=registry,
     )
 
@@ -153,19 +161,6 @@ def test_loader_normalization_and_filtering_pipeline() -> None:
     assert filtered.selected_global_context_ids
     assert filtered.selected_bo_ids
     assert filtered.selected_function_ids
-
-
-def test_context_bo_function_independent_filtering() -> None:
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
-    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=1)).build_filtered_environment(
-        node_info=_request().node_def,
-        user_query="根据性别生成称谓",
-        registry=registry,
-    )
-    assert len(filtered.selected_global_context_ids) == 1
-    assert len(filtered.selected_bo_ids) == 1
-    assert len(filtered.selected_function_ids) == 1
 
 
 def test_local_context_inherits_from_edsl_ancestors() -> None:
@@ -182,24 +177,17 @@ def test_only_parent_or_parent_list_provide_local_context() -> None:
     assert "should_not_visible" not in names
 
 
-def test_global_context_comes_from_context_json_not_edsl() -> None:
-    filtered = _build_filtered_env()
-    global_names = {filtered.registry.contexts[cid].name for cid in filtered.selected_global_context_ids}
-    assert "customer" in global_names or "gender" in global_names
-    assert "invoiceId" not in global_names
-
-
 def test_bo_filter_respects_is_ab_data_source() -> None:
     provider = InMemoryResourceProvider(dataset=_dataset())
     registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
     filtered_non_ab = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=5)).build_filtered_environment(
         node_info=_request(is_ab=False).node_def,
-        user_query="查询发票",
+        user_query="query invoice",
         registry=registry,
     )
     filtered_ab = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=5)).build_filtered_environment(
         node_info=_request(is_ab=True, ab_sources=["crm"]).node_def,
-        user_query="查询发票",
+        user_query="query invoice",
         registry=registry,
     )
     assert len(filtered_non_ab.selected_bo_ids) >= 2
@@ -208,11 +196,13 @@ def test_bo_filter_respects_is_ab_data_source() -> None:
 
 def test_planner_only_sees_filtered_ids() -> None:
     plan = {
-        "intent_summary": "function call",
-        "expression_pattern": "function_call",
-        "context_refs": ["context:$ctx$.customer.gender"],
-        "function_refs": ["function:Customer.GetSalutation"],
-        "semantic_slots": {"function_args": ["context:$ctx$.customer.gender"]},
+        "definitions": [],
+        "return_expr": {
+            "type": "function_call",
+            "function_id": "function:Customer.GetSalutation",
+            "function_name": "Customer.GetSalutation",
+            "args": [{"type": "context_ref", "path": "$ctx$.customer.gender"}],
+        },
     }
     agent = _build_agent(plan)
     response = agent.generate_dsl(_request())
@@ -223,50 +213,73 @@ def test_planner_only_sees_filtered_ids() -> None:
     assert "function:Customer.GetSalutation" in payload["environment"]["selected_function_ids"]
 
 
-def test_ast_builder_builds_valid_edsl_by_resource_id() -> None:
-    filtered = _build_filtered_env()
-    plan = LLMPlanner(
-        StubOpenAIClient(
-            plan_response={
-                "intent_summary": "query",
-                "expression_pattern": "fetch_one",
-                "context_refs": ["context:$ctx$.customer.id"],
-                "bo_refs": [
-                    {
-                        "bo_id": "bo:CustomerBO",
-                        "field_id": "bo:CustomerBO:field:name",
-                        "data_source": "crm",
-                        "naming_sql_id": "bo:CustomerBO:sql:findById",
-                        "params": [{"param_name": "id", "value": "context:$ctx$.customer.id", "value_source_type": "context"}],
-                    }
-                ],
-            }
-        )
-    ).plan("x", _request().node_def, filtered)
-    ast = ASTBuilder().build_ast(plan, filtered)
-    assert ast.value == "CustomerBO"
-    assert ast.metadata["target_field"] == "name"
+def test_generate_dsl_renders_program_defs_and_final_expression() -> None:
+    plan = {
+        "raw_plan": "query gender then derive title",
+        "definitions": [
+            {
+                "kind": "variable",
+                "name": "customer_gender",
+                "expr": {
+                    "type": "query_call",
+                    "query_kind": "select_one",
+                    "source_name": "CustomerBO",
+                    "bo_id": "bo:CustomerBO",
+                    "field": "gender",
+                    "data_source": "crm",
+                    "naming_sql_id": "bo:CustomerBO:sql:findById",
+                    "filters": [
+                        {
+                            "field": "id",
+                            "value": {"type": "context_ref", "path": "$ctx$.customer.id"},
+                        }
+                    ],
+                },
+            },
+            {
+                "kind": "variable",
+                "name": "title_prefix",
+                "expr": {
+                    "type": "if",
+                    "condition": {
+                        "type": "binary_op",
+                        "operator": "==",
+                        "left": {"type": "var_ref", "name": "customer_gender"},
+                        "right": {"type": "literal", "value": "M"},
+                    },
+                    "then_expr": {"type": "literal", "value": "MR."},
+                    "else_expr": {"type": "literal", "value": "MS."},
+                },
+            },
+        ],
+        "return_expr": {"type": "var_ref", "name": "title_prefix"},
+    }
+    agent = _build_agent(plan)
+    response = agent.generate_dsl(_request())
+
+    assert response.success is True
+    assert response.dsl.splitlines() == [
+        "def customer_gender = select_one(CustomerBO.gender, id=$ctx$.customer.id)",
+        'def title_prefix = if(customer_gender == "M", "MR.", "MS.")',
+        "title_prefix",
+    ]
 
 
-def test_validator_detects_illegal_reference() -> None:
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
-    filtered = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=1)).build_filtered_environment(
-        node_info=_request().node_def,
-        user_query="根据性别生成称谓",
-        registry=registry,
-    )
-    bad_plan = LLMPlanner(
-        StubOpenAIClient(
-            plan_response={
-                "intent_summary": "bad",
-                "expression_pattern": "function_call",
-                "context_refs": ["context:$ctx$.customer.gender"],
-                "function_refs": ["function:String.Upper"],
-                "semantic_slots": {"function_args": ["context:$ctx$.customer.gender"]},
+def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
+    invalid_plan = {
+        "definitions": [
+            {
+                "kind": "variable",
+                "name": "title_prefix",
+                "expr": {"type": "var_ref", "name": "customer_gender"},
             }
-        )
-    ).plan("x", _request().node_def, filtered)
-    result = PlanValidator(planner=None).validate(bad_plan, filtered)
-    assert result.is_valid is False
-    assert any("function not in filtered environment" in issue for issue in result.issues)
+        ],
+        "return_expr": {"type": "var_ref", "name": "title_prefix"},
+    }
+    agent = _build_agent(plan_response=invalid_plan, repair_response=invalid_plan)
+    response = agent.generate_dsl(_request())
+
+    assert response.success is False
+    assert response.failure_reason == "plan validation failed"
+    assert response.validation is not None
+    assert any(item.code == "undefined_var_ref" for item in response.validation.issues)

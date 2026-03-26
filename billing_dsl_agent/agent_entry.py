@@ -6,7 +6,7 @@ from billing_dsl_agent.ast_builder import ASTBuilder
 from billing_dsl_agent.dsl_renderer import DSLRenderer
 from billing_dsl_agent.environment import EnvironmentBuilder
 from billing_dsl_agent.llm_planner import LLMPlanner
-from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, ValidationResult
+from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, ValidationIssue, ValidationResult
 from billing_dsl_agent.plan_validator import PlanValidator
 from billing_dsl_agent.resource_loader import ResourceLoader
 from billing_dsl_agent.resource_normalizer import ResourceNormalizer
@@ -15,11 +15,17 @@ from billing_dsl_agent.resource_normalizer import ResourceNormalizer
 @dataclass(slots=True)
 class FinalValidator:
     def validate(self, dsl: str) -> ValidationResult:
-        issues: list[str] = []
+        issues: list[ValidationIssue] = []
         if not dsl.strip():
-            issues.append("dsl is empty")
+            issues.append(ValidationIssue(code="dsl_empty", message="dsl is empty", path="dsl"))
         if dsl.count("(") != dsl.count(")"):
-            issues.append("parentheses not balanced")
+            issues.append(
+                ValidationIssue(
+                    code="dsl_parentheses_unbalanced",
+                    message="parentheses not balanced",
+                    path="dsl",
+                )
+            )
         return ValidationResult(is_valid=not issues, issues=issues)
 
 
@@ -57,7 +63,7 @@ class DSLAgent:
             )
 
         valid_plan = plan_validation.repaired_plan or plan
-        ast = self.ast_builder.build_ast(valid_plan, filtered_env)
+        ast = self.ast_builder.build_program_from_plan(valid_plan, filtered_env)
         dsl = self.dsl_renderer.render(ast)
         final_validation = self.final_validator.validate(dsl)
         return GenerateDSLResponse(
