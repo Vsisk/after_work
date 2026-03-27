@@ -29,6 +29,8 @@ class BOResource:
     field_ids: List[str] = field(default_factory=list)
     data_source: str = ""
     naming_sql_ids: List[str] = field(default_factory=list)
+    naming_sql_name_by_key: Dict[str, str] = field(default_factory=dict)
+    naming_sql_param_names_by_key: Dict[str, List[str]] = field(default_factory=dict)
     scope: str = "system"
     domain: str = "default"
     description: str = ""
@@ -125,6 +127,11 @@ class QueryFilterPlanNode(StrictModel):
     value: "ExprPlanNode"
 
 
+class QueryPairPlanNode(StrictModel):
+    key: str
+    value: "ExprPlanNode"
+
+
 class FunctionCallPlanNode(StrictModel):
     type: Literal["function_call"]
     function_name: str | None = None
@@ -141,6 +148,8 @@ class QueryCallPlanNode(StrictModel):
     data_source: str | None = None
     naming_sql_id: str | None = None
     filters: List[QueryFilterPlanNode] = Field(default_factory=list)
+    where: "ExprPlanNode" | None = None
+    pairs: List[QueryPairPlanNode] = Field(default_factory=list)
 
 
 class IfPlanNode(StrictModel):
@@ -307,6 +316,7 @@ class GenerateDSLResponse(StrictModel):
 
 
 QueryFilterPlanNode.model_rebuild()
+QueryPairPlanNode.model_rebuild()
 FunctionCallPlanNode.model_rebuild()
 QueryCallPlanNode.model_rebuild()
 IfPlanNode.model_rebuild()

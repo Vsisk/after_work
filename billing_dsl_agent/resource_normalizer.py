@@ -51,18 +51,30 @@ class ResourceNormalizer:
                 resource_id = f"bo:{bo.bo_name}"
                 field_ids = [f"{resource_id}:field:{field.name}" for field in bo.fields]
                 naming_sql_ids = [f"{resource_id}:sql:{sql.name}" for sql in bo.query_capability.naming_sqls if sql.name]
+                naming_sql_name_by_key: dict[str, str] = {}
+                naming_sql_param_names_by_key: dict[str, list[str]] = {}
                 data_source = ""
                 for sql in bo.query_capability.naming_sqls:
                     ds = str(sql.metadata.get("or_mapping_data_source") or "")
                     if ds:
                         data_source = ds
-                        break
+                    sql_name = str(sql.name or "").strip()
+                    sql_id = str(sql.id or "").strip()
+                    if not sql_name:
+                        continue
+                    param_names = [str(param.name or "").strip() for param in sql.params if str(param.name or "").strip()]
+                    for key in {sql_name, sql_id, f"{resource_id}:sql:{sql_name}"}:
+                        if key:
+                            naming_sql_name_by_key[key] = sql_name
+                            naming_sql_param_names_by_key[key] = list(param_names)
                 registry[resource_id] = BOResource(
                     resource_id=resource_id,
                     bo_name=bo.bo_name,
                     field_ids=field_ids,
                     data_source=data_source,
                     naming_sql_ids=naming_sql_ids,
+                    naming_sql_name_by_key=naming_sql_name_by_key,
+                    naming_sql_param_names_by_key=naming_sql_param_names_by_key,
                     scope=scope,
                     domain=bo.bo_name,
                     description=bo.description,
