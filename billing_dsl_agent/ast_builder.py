@@ -66,23 +66,39 @@ class ASTBuilder:
 
         if isinstance(node, QueryCallPlanNode):
             source_name = node.source_name
-            if node.bo_id and node.bo_id in registry.bos:
+            query_kind = node.query_kind
+            if query_kind in {"select", "select_one"} and node.bo_id and node.bo_id in registry.bos:
                 source_name = registry.bos[node.bo_id].bo_name
+            if query_kind in {"fetch", "fetch_one"} and node.bo_id and node.bo_id in registry.bos:
+                bo = registry.bos[node.bo_id]
+                matched_name = bo.naming_sql_name_by_key.get(str(node.naming_sql_id or "").strip())
+                if not matched_name and node.source_name:
+                    matched_name = bo.naming_sql_name_by_key.get(node.source_name)
+                if matched_name:
+                    source_name = matched_name
             return ExprNode(
                 kind=ExprKind.QUERY_CALL,
                 value=source_name,
                 metadata={
-                    "query_kind": node.query_kind,
+                    "query_kind": query_kind,
                     "target_field": node.field,
                     "bo_id": node.bo_id,
                     "data_source": node.data_source,
                     "naming_sql_id": node.naming_sql_id,
+                    "where": self.build_expr_from_plan(node.where, env) if node.where else None,
                     "filters": [
                         {
                             "field": query_filter.field,
                             "value": self.build_expr_from_plan(query_filter.value, env),
                         }
                         for query_filter in node.filters
+                    ],
+                    "pairs": [
+                        {
+                            "key": pair.key,
+                            "value": self.build_expr_from_plan(pair.value, env),
+                        }
+                        for pair in node.pairs
                     ],
                 },
             )

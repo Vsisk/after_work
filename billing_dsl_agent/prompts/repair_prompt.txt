@@ -11,5 +11,9 @@ Hard constraints:
 - prefer fixing invalid references, illegal names, ordering, and over-nesting
 - prefer extracting reused or deep sub-expressions into variable definitions when that makes the plan valid
 - do not silently drop required logic just to satisfy validation
+- when issue is naming_sql_param_mismatch:
+  - align fetch/fetch_one pairs with naming-sql param_list exactly (same names and same count)
+- when issue is invalid_where_operator:
+  - fix where AST operators to supported set: and/or/not and comparisons (==, !=, >, >=, <, <=)
 
 Return JSON ProgramPlan only.

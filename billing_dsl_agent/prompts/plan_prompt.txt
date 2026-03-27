@@ -47,9 +47,15 @@ Rules:
 
 query_call guidance:
 - use query_kind in {"select", "select_one", "fetch", "fetch_one"}
-- use source_name for the BO name
-- use field for target field when needed
-- use filters as [{"field": "...", "value": ExprPlanNode}]
+- for select/select_one:
+  - source_name should be BO name
+  - optional field for target field
+  - prefer where as boolean AST using binary_op with and/or/comparison operators and unary_op not
+  - filters can be used for compatibility as [{"field":"...","value":ExprPlanNode}]
+- for fetch/fetch_one:
+  - provide naming_sql_id when available
+  - source_name should be naming-sql name
+  - use pairs as [{"key":"PARAM_NAME","value":ExprPlanNode}]
 
 function_call guidance:
 - use function_name or function_id

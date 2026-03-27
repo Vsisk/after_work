@@ -74,7 +74,18 @@ def _dataset() -> dict:
                         "bo_name": "CustomerBO",
                         "bo_desc": "customer data",
                         "property_list": [{"field_name": "name"}, {"field_name": "gender"}, {"field_name": "id"}],
-                        "or_mapping_list": [{"or_mapping_data_source": "crm", "naming_sql_list": [{"sql_name": "findById"}]}],
+                        "or_mapping_list": [
+                            {
+                                "or_mapping_data_source": "crm",
+                                "naming_sql_list": [
+                                    {
+                                        "naming_sql_id": "get_customer_by_id_001",
+                                        "sql_name": "findById",
+                                        "param_list": [{"param_name": "id"}],
+                                    }
+                                ],
+                            }
+                        ],
                     }
                 ],
                 "custom_bo_list": [
@@ -82,7 +93,12 @@ def _dataset() -> dict:
                         "bo_name": "InvoiceBO",
                         "bo_desc": "invoice data",
                         "property_list": [{"field_name": "title"}],
-                        "or_mapping_list": [{"or_mapping_data_source": "billing", "naming_sql_list": [{"sql_name": "findByInvoiceId"}]}],
+                        "or_mapping_list": [
+                            {
+                                "or_mapping_data_source": "billing",
+                                "naming_sql_list": [{"sql_name": "findByInvoiceId"}],
+                            }
+                        ],
                     }
                 ],
             },
@@ -283,3 +299,95 @@ def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
     assert response.failure_reason == "plan validation failed"
     assert response.validation is not None
     assert any(item.code == "undefined_var_ref" for item in response.validation.issues)
+
+
+def test_select_one_supports_where_boolean_ast_render() -> None:
+    plan = {
+        "definitions": [],
+        "return_expr": {
+            "type": "query_call",
+            "query_kind": "select_one",
+            "source_name": "CustomerBO",
+            "bo_id": "bo:CustomerBO",
+            "field": "gender",
+            "where": {
+                "type": "binary_op",
+                "operator": "and",
+                "left": {
+                    "type": "binary_op",
+                    "operator": "==",
+                    "left": {"type": "context_ref", "path": "$ctx$.customer.id"},
+                    "right": {"type": "literal", "value": "C001"},
+                },
+                "right": {
+                    "type": "binary_op",
+                    "operator": "!=",
+                    "left": {"type": "context_ref", "path": "$ctx$.customer.gender"},
+                    "right": {"type": "literal", "value": ""},
+                },
+            },
+        },
+    }
+    response = _build_agent(plan).generate_dsl(_request())
+    assert response.success is True
+    assert response.dsl == 'select_one(CustomerBO.gender, $ctx$.customer.id == "C001" and $ctx$.customer.gender != "")'
+
+
+def test_fetch_one_renders_naming_sql_name_and_pair() -> None:
+    plan = {
+        "definitions": [],
+        "return_expr": {
+            "type": "query_call",
+            "query_kind": "fetch_one",
+            "source_name": "CustomerBO",
+            "bo_id": "bo:CustomerBO",
+            "naming_sql_id": "get_customer_by_id_001",
+            "pairs": [
+                {
+                    "key": "id",
+                    "value": {"type": "context_ref", "path": "$ctx$.customer.id"},
+                }
+            ],
+        },
+    }
+    response = _build_agent(plan).generate_dsl(_request())
+    assert response.success is True
+    assert response.dsl == "fetch_one(findById, pair(id, $ctx$.customer.id))"
+
+
+def test_fetch_pair_mismatch_repair_loop_success() -> None:
+    invalid_plan = {
+        "definitions": [],
+        "return_expr": {
+            "type": "query_call",
+            "query_kind": "fetch_one",
+            "source_name": "CustomerBO",
+            "bo_id": "bo:CustomerBO",
+            "naming_sql_id": "get_customer_by_id_001",
+            "pairs": [
+                {
+                    "key": "wrongParam",
+                    "value": {"type": "context_ref", "path": "$ctx$.customer.id"},
+                }
+            ],
+        },
+    }
+    repaired_plan = {
+        "definitions": [],
+        "return_expr": {
+            "type": "query_call",
+            "query_kind": "fetch_one",
+            "source_name": "findById",
+            "bo_id": "bo:CustomerBO",
+            "naming_sql_id": "get_customer_by_id_001",
+            "pairs": [
+                {
+                    "key": "id",
+                    "value": {"type": "context_ref", "path": "$ctx$.customer.id"},
+                }
+            ],
+        },
+    }
+    response = _build_agent(plan_response=invalid_plan, repair_response=repaired_plan).generate_dsl(_request())
+    assert response.success is True
+    assert response.dsl == "fetch_one(findById, pair(id, $ctx$.customer.id))"

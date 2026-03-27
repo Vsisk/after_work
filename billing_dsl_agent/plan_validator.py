@@ -23,6 +23,7 @@ from billing_dsl_agent.models import (
     ProgramPlanLimits,
     QueryCallPlanNode,
     QueryFilterPlanNode,
+    QueryPairPlanNode,
     UnaryOpPlanNode,
     ValidationIssue,
     ValidationResult,
@@ -262,27 +263,62 @@ def _validate_expr_semantics(
         return issues
 
     if isinstance(expr, QueryCallPlanNode):
-        bo_id, bo = _resolve_bo(expr, env)
-        if bo is None or bo_id is None:
-            issues.append(issue("unknown_bo_ref", f"unknown BO ref: {expr.bo_id or expr.source_name}", path))
-        else:
-            if bo_id not in filtered_bos:
-                issues.append(issue("bo_not_in_filtered_environment", f"bo not in filtered environment: {bo_id}", path))
-            if expr.field and not _bo_has_field(bo, expr.field):
-                issues.append(issue("unknown_bo_field", f"unknown BO field: {expr.field}", f"{path}.field"))
-            if expr.data_source and bo.data_source and expr.data_source != bo.data_source:
-                issues.append(issue("bo_data_source_mismatch", f"bo data source mismatch: {bo_id}", f"{path}.data_source"))
-            if expr.naming_sql_id and not _bo_has_naming_sql(bo, expr.naming_sql_id):
-                issues.append(issue("unknown_naming_sql", f"unknown naming sql id: {expr.naming_sql_id}", f"{path}.naming_sql_id"))
-            for filter_index, query_filter in enumerate(expr.filters):
-                if not _bo_has_field(bo, query_filter.field):
+        if expr.query_kind in {"select", "select_one"}:
+            bo_id, bo = _resolve_bo(expr, env)
+            if bo is None or bo_id is None:
+                issues.append(issue("unknown_bo_ref", f"unknown BO ref: {expr.bo_id or expr.source_name}", path))
+            else:
+                if bo_id not in filtered_bos:
+                    issues.append(issue("bo_not_in_filtered_environment", f"bo not in filtered environment: {bo_id}", path))
+                if expr.field and not _bo_has_field(bo, expr.field):
+                    issues.append(issue("unknown_bo_field", f"unknown BO field: {expr.field}", f"{path}.field"))
+                if expr.data_source and bo.data_source and expr.data_source != bo.data_source:
+                    issues.append(issue("bo_data_source_mismatch", f"bo data source mismatch: {bo_id}", f"{path}.data_source"))
+                if expr.naming_sql_id and not _bo_has_naming_sql(bo, expr.naming_sql_id):
+                    issues.append(issue("unknown_naming_sql", f"unknown naming sql id: {expr.naming_sql_id}", f"{path}.naming_sql_id"))
+                for filter_index, query_filter in enumerate(expr.filters):
+                    if not _bo_has_field(bo, query_filter.field):
+                        issues.append(
+                            issue(
+                                "unknown_bo_field",
+                                f"unknown BO field: {query_filter.field}",
+                                f"{path}.filters[{filter_index}].field",
+                            )
+                        )
+                if expr.where is not None:
+                    issues.extend(_validate_where_expr(expr.where, bo, env, f"{path}.where"))
+        elif expr.query_kind in {"fetch", "fetch_one"}:
+            resolved = _resolve_naming_sql(expr, env)
+            if resolved is None:
+                issues.append(
+                    issue(
+                        "unknown_naming_sql",
+                        f"unknown naming sql for query: {expr.naming_sql_id or expr.source_name}",
+                        f"{path}.naming_sql_id",
+                    )
+                )
+            else:
+                resolved_bo_id, resolved_bo, naming_sql_name, param_names = resolved
+                if resolved_bo_id not in filtered_bos:
+                    issues.append(issue("bo_not_in_filtered_environment", f"bo not in filtered environment: {resolved_bo_id}", path))
+                if expr.data_source and resolved_bo.data_source and expr.data_source != resolved_bo.data_source:
+                    issues.append(
+                        issue("bo_data_source_mismatch", f"bo data source mismatch: {resolved_bo_id}", f"{path}.data_source")
+                    )
+                actual_keys = [pair.key for pair in expr.pairs if str(pair.key or "").strip()]
+                if not actual_keys and expr.filters:
+                    actual_keys = [flt.field for flt in expr.filters if str(flt.field or "").strip()]
+                expected = [name for name in param_names if name]
+                if set(expected) != set(actual_keys) or len(expected) != len(actual_keys):
                     issues.append(
                         issue(
-                            "unknown_bo_field",
-                            f"unknown BO field: {query_filter.field}",
-                            f"{path}.filters[{filter_index}].field",
+                            "naming_sql_param_mismatch",
+                            f"naming sql params mismatch for {naming_sql_name}: expected={expected}, actual={actual_keys}",
+                            f"{path}.pairs",
                         )
                     )
+        else:
+            issues.append(issue("invalid_query_shape", f"unsupported query kind: {expr.query_kind}", f"{path}.query_kind"))
         for filter_index, query_filter in enumerate(expr.filters):
             issues.extend(
                 _validate_expr_semantics(
@@ -291,6 +327,8 @@ def _validate_expr_semantics(
                     f"{path}.filters[{filter_index}].value",
                 )
             )
+        for pair_index, pair in enumerate(expr.pairs):
+            issues.extend(_validate_expr_semantics(pair.value, env, f"{path}.pairs[{pair_index}].value"))
         return issues
 
     if isinstance(expr, FunctionCallPlanNode):
@@ -484,17 +522,28 @@ def _legacy_plan_to_expr(plan: LegacyPlanDraft) -> ExprPlanNode:
         bo_ref = plan.bo_refs[0]
         bo_id = str(bo_ref.get("bo_id") or "").strip() or None
         field_id = str(bo_ref.get("field_id") or "").strip()
+        naming_sql_id = str(bo_ref.get("naming_sql_id") or "").strip() or None
+        source_name = _bo_name_from_identifier(bo_id or "")
+        if pattern in {"fetch", "fetch_one"} and naming_sql_id:
+            source_name = _suffix_name(naming_sql_id)
         return QueryCallPlanNode(
             type="query_call",
             query_kind=pattern,
-            source_name=_bo_name_from_identifier(bo_id or ""),
+            source_name=source_name,
             field=_field_name_from_identifier(field_id) if field_id else None,
             bo_id=bo_id,
             data_source=str(bo_ref.get("data_source") or "").strip() or None,
-            naming_sql_id=str(bo_ref.get("naming_sql_id") or "").strip() or None,
+            naming_sql_id=naming_sql_id,
             filters=[
                 QueryFilterPlanNode(
                     field=str(param.get("param_name") or "").strip(),
+                    value=_legacy_param_to_expr(param),
+                )
+                for param in bo_ref.get("params") or []
+            ],
+            pairs=[
+                QueryPairPlanNode(
+                    key=str(param.get("param_name") or "").strip(),
                     value=_legacy_param_to_expr(param),
                 )
                 for param in bo_ref.get("params") or []
@@ -649,6 +698,17 @@ def _normalize_legacy_expr_tree(payload: Any) -> dict[str, Any]:
                 }
                 for item in filters
             ],
+            "where": _normalize_legacy_expr_tree(metadata.get("where")) if isinstance(metadata.get("where"), dict) else None,
+            "pairs": [
+                {
+                    "key": item.get("key") or item.get("field"),
+                    "value": _normalize_legacy_expr_tree(item.get("value"))
+                    if isinstance(item.get("value"), dict)
+                    else _legacy_scalar_to_expr(item.get("value")).model_dump(mode="python"),
+                }
+                for item in (metadata.get("pairs") or [])
+                if isinstance(item, dict)
+            ],
         }
     if kind == "IF_EXPR":
         return {
@@ -699,7 +759,11 @@ def _child_expressions(node: ExprPlanNode) -> list[ExprPlanNode]:
     if isinstance(node, FunctionCallPlanNode):
         return list(node.args)
     if isinstance(node, QueryCallPlanNode):
-        return [query_filter.value for query_filter in node.filters]
+        children = [query_filter.value for query_filter in node.filters]
+        if node.where is not None:
+            children.append(node.where)
+        children.extend([pair.value for pair in node.pairs])
+        return children
     if isinstance(node, IfPlanNode):
         return [node.condition, node.then_expr, node.else_expr]
     if isinstance(node, BinaryOpPlanNode):
@@ -752,6 +816,80 @@ def _bo_has_field(bo: Any, field_name: str) -> bool:
 
 def _bo_has_naming_sql(bo: Any, naming_sql: str) -> bool:
     return any(sql_id == naming_sql or _suffix_name(sql_id) == naming_sql for sql_id in bo.naming_sql_ids)
+
+
+def _resolve_naming_sql(expr: QueryCallPlanNode, env: FilteredEnvironment) -> tuple[str, Any, str, list[str]] | None:
+    if expr.bo_id and expr.bo_id in env.registry.bos:
+        bo = env.registry.bos[expr.bo_id]
+        result = _resolve_naming_sql_for_bo(bo, expr)
+        if result is not None:
+            return expr.bo_id, bo, result[0], result[1]
+
+    bo_id, bo = _resolve_bo(expr, env)
+    if bo is not None and bo_id is not None:
+        result = _resolve_naming_sql_for_bo(bo, expr)
+        if result is not None:
+            return bo_id, bo, result[0], result[1]
+
+    for each_bo_id, each_bo in env.registry.bos.items():
+        result = _resolve_naming_sql_for_bo(each_bo, expr)
+        if result is not None:
+            return each_bo_id, each_bo, result[0], result[1]
+    return None
+
+
+def _resolve_naming_sql_for_bo(bo: Any, expr: QueryCallPlanNode) -> tuple[str, list[str]] | None:
+    candidate_keys = [str(expr.naming_sql_id or "").strip(), str(expr.source_name or "").strip()]
+    for key in candidate_keys:
+        if not key:
+            continue
+        naming_sql_name = bo.naming_sql_name_by_key.get(key)
+        if not naming_sql_name:
+            continue
+        param_names = bo.naming_sql_param_names_by_key.get(key) or bo.naming_sql_param_names_by_key.get(naming_sql_name) or []
+        return naming_sql_name, list(param_names)
+    return None
+
+
+def _validate_where_expr(expr: ExprPlanNode, bo: Any, env: FilteredEnvironment, path: str) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if isinstance(expr, BinaryOpPlanNode):
+        operator = str(expr.operator or "").lower()
+        logical_ops = {"and", "or"}
+        compare_ops = {"==", "!=", ">", ">=", "<", "<="}
+        if operator not in logical_ops | compare_ops:
+            issues.append(issue("invalid_where_operator", f"unsupported where operator: {expr.operator}", f"{path}.operator"))
+        if operator in logical_ops:
+            issues.extend(_validate_where_expr(expr.left, bo, env, f"{path}.left"))
+            issues.extend(_validate_where_expr(expr.right, bo, env, f"{path}.right"))
+        else:
+            issues.extend(_validate_expr_semantics(expr.left, env, f"{path}.left"))
+            issues.extend(_validate_expr_semantics(expr.right, env, f"{path}.right"))
+        return issues
+    if isinstance(expr, UnaryOpPlanNode):
+        if str(expr.operator or "").lower() != "not":
+            issues.append(issue("invalid_where_operator", f"unsupported where unary operator: {expr.operator}", f"{path}.operator"))
+        issues.extend(_validate_where_expr(expr.operand, bo, env, f"{path}.operand"))
+        return issues
+    if isinstance(expr, ContextRefPlanNode):
+        context_id = _resolve_context_id(expr.path, env)
+        if context_id is None:
+            issues.append(issue("unknown_context_ref", f"unknown context ref: {expr.path}", path))
+        return issues
+    if isinstance(expr, LocalRefPlanNode):
+        context_id = _resolve_context_id(expr.path, env)
+        if context_id is None:
+            issues.append(issue("unknown_local_ref", f"unknown local ref: {expr.path}", path))
+        return issues
+    if isinstance(expr, (LiteralPlanNode, VarRefPlanNode)):
+        return issues
+    if isinstance(expr, FieldAccessPlanNode):
+        if expr.field and not _bo_has_field(bo, expr.field):
+            issues.append(issue("unknown_bo_field", f"unknown BO field: {expr.field}", f"{path}.field"))
+        issues.extend(_validate_expr_semantics(expr.base, env, f"{path}.base"))
+        return issues
+    issues.extend(_validate_expr_semantics(expr, env, path))
+    return issues
 
 
 def _field_name_from_identifier(value: str) -> str:

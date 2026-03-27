@@ -37,16 +37,42 @@ class DSLRenderer:
             mode = str(expr.metadata.get("query_kind") or expr.metadata.get("query_mode") or "select")
             target = str(expr.value)
             target_field = str(expr.metadata.get("target_field") or "").strip()
+            if mode in {"fetch", "fetch_one"}:
+                rendered_pairs = []
+                pair_items = expr.metadata.get("pairs") or []
+                if not pair_items:
+                    pair_items = [
+                        {"key": item.get("field"), "value": item.get("value")}
+                        for item in (expr.metadata.get("filters") or [])
+                    ]
+                for pair in pair_items:
+                    key = str(pair.get("key") or "")
+                    value = pair.get("value")
+                    rendered_value = self.render_expr(value) if isinstance(value, ExprNode) else self._render_literal(value)
+                    rendered_pairs.append(f"pair({key}, {rendered_value})")
+                return f"{mode}({target}{', ' + ', '.join(rendered_pairs) if rendered_pairs else ''})"
+
+            where_expr = expr.metadata.get("where")
+            rendered_where = ""
+            if isinstance(where_expr, ExprNode):
+                rendered_where = self.render_expr(where_expr)
+            elif where_expr is not None:
+                rendered_where = self._render_literal(where_expr)
+
             rendered_filters = []
             for query_filter in expr.metadata.get("filters") or []:
                 key = str(query_filter.get("field") or "")
                 value = query_filter.get("value")
                 rendered_value = self.render_expr(value) if isinstance(value, ExprNode) else self._render_literal(value)
                 rendered_filters.append(f"{key}={rendered_value}")
-            param_text = ", ".join(rendered_filters)
-            if target_field:
-                return f"{mode}({target}.{target_field}{', ' + param_text if param_text else ''})"
-            return f"{mode}({target}{', ' + param_text if param_text else ''})"
+
+            if rendered_where and rendered_filters:
+                rendered_where = f"{rendered_where} and " + " and ".join(rendered_filters)
+            elif not rendered_where and rendered_filters:
+                rendered_where = " and ".join(rendered_filters)
+
+            target_expr = f"{target}.{target_field}" if target_field else target
+            return f"{mode}({target_expr}{', ' + rendered_where if rendered_where else ''})"
         if expr.kind == ExprKind.FIELD_ACCESS:
             return f"{self.render_expr(expr.children[0])}.{expr.value}"
         if expr.kind == ExprKind.LIST_LITERAL:
