@@ -7,6 +7,7 @@
 - normalize 入口固定接收容器对象：
   - `context_payload["global_context"]`
   - `context_payload["sub_gobal_context"]`
+- `global_context` 当前真实结构为直接挂载 `sub_properties`，不再包含 `custom_context/system_context` 包装层
 - 输入解析必须兼容真实字段 `sub_gobal_context`（保留向后兼容 `sub_global_context`）
 - 两类 root context 需要分别 normalize 并打上 `context_kind`
 - root 第一层字段来自 `sub_properties`；可展开类型继续递归 `children`

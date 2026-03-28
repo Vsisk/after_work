@@ -1,2 +1,3 @@
 - 2026-03-27 需求执行记录：完成 select/select_one 与 fetch/fetch_one 专项改造（查询 AST 扩展、query 语义校验、naming-sql 参数一致性校验、fetch 渲染 naming-sql 名称、repair prompt/plan prompt 更新、主流程测试补充）；未改动其他表达式类型语义。
 - 2026-03-28 需求执行记录：完成 context normalize 输入容器结构修正（`global_context` + `sub_gobal_context`）、新增 root/子属性递归展开与可展开类型判定、增强 normalized registry 索引、补充 context loader 测试样例与路径规则校验；测试受环境缺少 `pydantic` 依赖限制未完成执行。
+- 2026-03-28 需求执行记录：根据评审反馈收敛 global context 结构假设，移除 `global_context.custom_context/system_context` 合并分支，改为仅按 `global_context -> sub_properties` 直接解析；其余 `sub_gobal_context` 与递归 normalize 逻辑保持不变。

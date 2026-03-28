@@ -3,6 +3,7 @@
 ## Stage 1：入口与数据模型对齐
 - Task 1.1：扩展 `ContextRegistry`，增加 normalized 节点与索引结构。
 - Task 1.2：新增 `normalize_contexts` 入口，按 `global_context` / `sub_gobal_context` 双 root 解析。
+- Task 1.3：移除 `global_context.custom_context/system_context` 合并分支，按 `global_context -> sub_properties` 直接展开。
 
 ## Stage 2：递归展开与路径规则修正
 - Task 2.1：新增 `normalize_context_root` / `normalize_context_property`，从 `sub_properties` 起步递归 `children`。
