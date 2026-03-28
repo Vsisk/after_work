@@ -30,6 +30,37 @@ class NamingSQLDef:
 
 
 @dataclass(slots=True)
+class NormalizedNamingTypeRef:
+    data_type: str = ""
+    data_type_name: str = ""
+    is_list: bool | None = None
+    is_unknown: bool = False
+
+
+@dataclass(slots=True)
+class NormalizedNamingSQLParam:
+    param_id: str = ""
+    param_name: str = ""
+    data_type: str = ""
+    data_type_name: str = ""
+    is_list: bool | None = None
+    normalized_type_ref: NormalizedNamingTypeRef = field(default_factory=NormalizedNamingTypeRef)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class NormalizedNamingSQLDef:
+    naming_sql_id: str = ""
+    naming_sql_name: str = ""
+    bo_id: str = ""
+    description: str = ""
+    sql: str = ""
+    params: List[NormalizedNamingSQLParam] = field(default_factory=list)
+    signature_display: str = ""
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class BOQueryCapability:
     naming_sqls: List[NamingSQLDef] = field(default_factory=list)
 

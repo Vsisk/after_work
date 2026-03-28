@@ -20,6 +20,7 @@ class CandidateBO:
     description: str = ""
     fields: List[str] = field(default_factory=list)
     naming_sqls: List[str] = field(default_factory=list)
+    naming_sql_defs: List[Dict[str, Any]] = field(default_factory=list)
     score: float = 0.0
     source: str = "bo"
     metadata: Dict[str, Any] = field(default_factory=dict)

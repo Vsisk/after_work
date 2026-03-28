@@ -3,3 +3,4 @@
 - 2026-03-28 需求执行记录：根据评审反馈收敛 global context 结构假设，移除 `global_context.custom_context/system_context` 合并分支，改为仅按 `global_context -> sub_properties` 直接解析；其余 `sub_gobal_context` 与递归 normalize 逻辑保持不变。
 - 2026-03-28 需求执行记录：针对“load 后又 normalize 一次”反馈，调整 `ResourceNormalizer` 直接消费 `ContextRegistry.nodes_by_id` 产出 `ContextResource`，避免 context 树再次结构归一化；新增对应单测样例。
 - 2026-03-28 需求执行记录：补充“非叶子 context 不可直接引用”约束，`ResourceNormalizer` 仅将 `is_leaf=True` 节点写入 `registry.contexts`，并更新相关单测断言与文档。
+- 2026-03-28 需求执行记录：完成 BO namingSQL 参数签名增强（loader 读取 param_list 完整类型、normalizer 生成 normalized namingSQL/signature_display 与 by-key 签名索引、BOResource 增加 naming_sql signature/param meta 映射、ResourceManager bo_candidates 输出 naming_sql_defs、PlanValidator 新增 compare_namingsql_param_type 与 fetch 参数签名/数量/类型顺序校验及缺失 warning）；新增对应测试。当前环境受 Python3.10 + 现有 pydantic 注解兼容问题影响，pytest 收集失败，已通过 py_compile 语法校验。

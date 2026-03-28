@@ -143,6 +143,7 @@ def _normalize_params(raw_params: Any) -> List[ParameterDef]:
                     "raw_data_type": _as_text(item.get("data_type")),
                     "raw_data_type_name": _as_text(item.get("data_type_name")),
                     "raw_is_list": bool(item.get("is_list", False)),
+                    "raw_payload": dict(item),
                 },
             )
         )
