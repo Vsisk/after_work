@@ -76,11 +76,7 @@ class EnvironmentBuilder:
         if function_registry is None:
             return None
         copied_by_id = {key: value for key, value in function_registry.functions_by_id.items() if value in functions.values()}
-        copied_by_name = {
-            key: [value for value in values if value in functions.values()]
-            for key, values in function_registry.functions_by_name.items()
-        }
-        return FunctionRegistry(functions_by_id=copied_by_id, functions_by_name=copied_by_name)
+        return FunctionRegistry(functions_by_id=copied_by_id)
 
     def _recall_domains(self, node_info: NodeDef, user_query: str, domains: set[str]) -> set[str]:
         text = f"{node_info.node_name} {node_info.node_path} {node_info.description} {user_query}".lower()

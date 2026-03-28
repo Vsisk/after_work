@@ -187,7 +187,7 @@ def test_loader_normalization_and_filtering_pipeline() -> None:
     assert fn.param_defs[0].normalized_param_type == "unknown"
     assert filtered.registry.functions["function:String.Now"].param_defs == []
     assert filtered.registry.function_registry is not None
-    assert "Customer.GetSalutation" in filtered.registry.function_registry.functions_by_name
+    assert "function:Customer.GetSalutation" in filtered.registry.function_registry.functions_by_id
 
 
 def test_local_context_inherits_from_edsl_ancestors() -> None:

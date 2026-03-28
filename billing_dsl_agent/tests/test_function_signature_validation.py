@@ -38,16 +38,13 @@ def _build_function(
 
 def _build_env(functions: list[FunctionResource]) -> FilteredEnvironment:
     function_map = {item.resource_id: item for item in functions}
-    by_name: dict[str, list[FunctionResource]] = {}
     by_id: dict[str, FunctionResource] = {}
     for fn in functions:
-        by_name.setdefault(fn.full_name, []).append(fn)
-        by_name.setdefault(fn.name, []).append(fn)
         by_id[fn.resource_id] = fn
         by_id[fn.function_id] = fn
     registry = ResourceRegistry(
         functions=function_map,
-        function_registry=FunctionRegistry(functions_by_id=by_id, functions_by_name=by_name),
+        function_registry=FunctionRegistry(functions_by_id=by_id),
     )
     return FilteredEnvironment(registry=registry, selected_function_ids=list(function_map.keys()))
 
@@ -137,4 +134,3 @@ def test_function_signature_reports_unknown_param_type_as_warning() -> None:
     warning_issues = [item for item in issues if item.code == "function_param_type_unknown"]
     assert warning_issues
     assert all(item.severity == "warning" for item in warning_issues)
-

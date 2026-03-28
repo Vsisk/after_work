@@ -129,7 +129,6 @@ class ResourceNormalizer:
     def _normalize_functions(self, loaded: LoadedResources) -> tuple[dict[str, FunctionResource], FunctionRegistry]:
         registry: dict[str, FunctionResource] = {}
         functions_by_id: dict[str, FunctionResource] = {}
-        functions_by_name: dict[str, list[FunctionResource]] = {}
         for row in loaded.function_payload.get("functions") or []:
             full_name = str(row.get("full_name") or row.get("name") or "").strip()
             if not full_name:
@@ -206,8 +205,4 @@ class ResourceNormalizer:
             registry[resource_id] = function_resource
             functions_by_id[function_resource.resource_id] = function_resource
             functions_by_id[function_resource.function_id] = function_resource
-            full_name_key = function_resource.full_name
-            short_name_key = function_resource.name
-            functions_by_name.setdefault(full_name_key, []).append(function_resource)
-            functions_by_name.setdefault(short_name_key, []).append(function_resource)
-        return registry, FunctionRegistry(functions_by_id=functions_by_id, functions_by_name=functions_by_name)
+        return registry, FunctionRegistry(functions_by_id=functions_by_id)

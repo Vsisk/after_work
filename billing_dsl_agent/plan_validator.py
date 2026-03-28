@@ -847,11 +847,6 @@ def _resolve_function(expr: FunctionCallPlanNode, env: FilteredEnvironment) -> t
     for function_id, function in registry.functions.items():
         if function.full_name == expr.function_name or function.name == expr.function_name:
             return function_id, function
-    if expr.function_name and function_registry is not None:
-        by_name = getattr(function_registry, "functions_by_name", {})
-        matched = by_name.get(expr.function_name) or []
-        if len(matched) == 1:
-            return matched[0].resource_id, matched[0]
     return None, None
 
 

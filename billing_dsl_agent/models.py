@@ -93,7 +93,6 @@ class FunctionParamResource:
 @dataclass(slots=True)
 class FunctionRegistry:
     functions_by_id: Dict[str, FunctionResource] = field(default_factory=dict)
-    functions_by_name: Dict[str, List[FunctionResource]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
