@@ -19,6 +19,20 @@ def _sample_bos() -> list[dict]:
             "description": "预处理子表",
             "fields": ["prepareId", "billCycleId", "regionId"],
             "naming_sqls": ["QUERY_BY_PREPARE_AND_CYCLE"],
+            "naming_sql_defs": [
+                {
+                    "naming_sql_id": "query_prepare_cycle_001",
+                    "naming_sql_name": "QUERY_BY_PREPARE_AND_CYCLE",
+                    "params": [
+                        {
+                            "param_name": "prepareId",
+                            "data_type": "basic",
+                            "data_type_name": "String",
+                            "is_list": False,
+                        }
+                    ],
+                }
+            ],
         }
     ]
 
@@ -131,7 +145,7 @@ def test_format_for_prompt() -> None:
     assert payload["bo_candidates"]
     assert payload["function_candidates"]
     assert {"path", "name", "description"}.issubset(payload["context_candidates"][0].keys())
-    assert {"bo_name", "description", "fields", "naming_sqls"}.issubset(payload["bo_candidates"][0].keys())
+    assert {"bo_name", "description", "fields", "naming_sqls", "naming_sql_defs"}.issubset(payload["bo_candidates"][0].keys())
     assert {"name", "description", "params"}.issubset(payload["function_candidates"][0].keys())
 
 

@@ -29,8 +29,11 @@ class BOResource:
     field_ids: List[str] = field(default_factory=list)
     data_source: str = ""
     naming_sql_ids: List[str] = field(default_factory=list)
+    naming_sql_defs: List[Dict[str, Any]] = field(default_factory=list)
     naming_sql_name_by_key: Dict[str, str] = field(default_factory=dict)
     naming_sql_param_names_by_key: Dict[str, List[str]] = field(default_factory=dict)
+    naming_sql_signature_by_key: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    naming_sql_param_meta_by_key: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     scope: str = "system"
     domain: str = "default"
     description: str = ""

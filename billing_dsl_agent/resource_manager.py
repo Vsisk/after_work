@@ -192,6 +192,7 @@ class ResourceManager:
                     "description": item.description,
                     "fields": item.fields,
                     "naming_sqls": item.naming_sqls,
+                    "naming_sql_defs": item.naming_sql_defs,
                 }
                 for item in candidate_set.bo_candidates
             ],
@@ -267,6 +268,7 @@ class ResourceManager:
             description = self._first_text(bo, "description", "desc")
             fields = self._bo_fields(bo)
             naming_sqls = self._bo_naming_sqls(bo)
+            naming_sql_defs = self._bo_naming_sql_defs(bo)
             score = self._match_score(terms, [bo_name, description, " ".join(fields), " ".join(naming_sqls)])
             if score <= 0:
                 continue
@@ -277,6 +279,7 @@ class ResourceManager:
                     description=description,
                     fields=fields,
                     naming_sqls=naming_sqls,
+                    naming_sql_defs=naming_sql_defs,
                 )
                 scores[norm_name] = candidate
             candidate.score += score
@@ -483,6 +486,43 @@ class ResourceManager:
                     values.append(self._first_text(item, "name", "sql_name", "id"))
             return [value for value in values if value]
         return []
+
+    def _bo_naming_sql_defs(self, bo: Any) -> List[Dict[str, Any]]:
+        raw = self._first_non_none(bo, "naming_sql_defs")
+        if isinstance(raw, list):
+            values: List[Dict[str, Any]] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                values.append(
+                    {
+                        "naming_sql_id": self._first_text(item, "naming_sql_id", "id"),
+                        "naming_sql_name": self._first_text(item, "naming_sql_name", "name", "sql_name"),
+                        "signature_display": self._first_text(item, "signature_display"),
+                        "params": [
+                            {
+                                "param_name": self._first_text(param, "param_name", "name"),
+                                "data_type": self._first_text(param, "data_type"),
+                                "data_type_name": self._first_text(param, "data_type_name"),
+                                "is_list": bool(param.get("is_list", False)),
+                            }
+                            for param in item.get("params", [])
+                            if isinstance(param, dict)
+                        ],
+                    }
+                )
+            return values
+
+        names = self._bo_naming_sqls(bo)
+        return [
+            {
+                "naming_sql_id": "",
+                "naming_sql_name": name,
+                "signature_display": "",
+                "params": [],
+            }
+            for name in names
+        ]
 
     def _function_full_name(self, fn: Any) -> str:
         full_name = self._first_text(fn, "full_name", "name")
