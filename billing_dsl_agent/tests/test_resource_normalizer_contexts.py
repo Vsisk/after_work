@@ -39,7 +39,7 @@ def test_resource_normalizer_prefers_context_registry_nodes_by_id() -> None:
     )
 
     registry = ResourceNormalizer().normalize(loaded)
-    assert "context:$ctx$.billInvoice" in registry.contexts
-    assert "context:$ctx$.billInvoice.customerInfo" in registry.contexts
+    assert "context:$ctx$.billInvoice" not in registry.contexts
+    assert "context:$ctx$.billInvoice.customerInfo" not in registry.contexts
     assert "context:$ctx$.billInvoice.customerInfo.CUST_ID" in registry.contexts
-    assert "context:$ctx$.bizExt" in registry.contexts
+    assert "context:$ctx$.bizExt" not in registry.contexts

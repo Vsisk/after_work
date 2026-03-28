@@ -2,3 +2,4 @@
 - 2026-03-28 需求执行记录：完成 context normalize 输入容器结构修正（`global_context` + `sub_gobal_context`）、新增 root/子属性递归展开与可展开类型判定、增强 normalized registry 索引、补充 context loader 测试样例与路径规则校验；测试受环境缺少 `pydantic` 依赖限制未完成执行。
 - 2026-03-28 需求执行记录：根据评审反馈收敛 global context 结构假设，移除 `global_context.custom_context/system_context` 合并分支，改为仅按 `global_context -> sub_properties` 直接解析；其余 `sub_gobal_context` 与递归 normalize 逻辑保持不变。
 - 2026-03-28 需求执行记录：针对“load 后又 normalize 一次”反馈，调整 `ResourceNormalizer` 直接消费 `ContextRegistry.nodes_by_id` 产出 `ContextResource`，避免 context 树再次结构归一化；新增对应单测样例。
+- 2026-03-28 需求执行记录：补充“非叶子 context 不可直接引用”约束，`ResourceNormalizer` 仅将 `is_leaf=True` 节点写入 `registry.contexts`，并更新相关单测断言与文档。

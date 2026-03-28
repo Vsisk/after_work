@@ -16,3 +16,4 @@
 
 ## Stage 4：消费链路去重
 - Task 4.1：`ResourceNormalizer` 优先使用 `ContextRegistry.nodes_by_id` 生成 `ContextResource`，避免重复结构 normalize。
+- Task 4.2：仅输出叶子节点到 `registry.contexts`，禁止非叶子 context 变量直接引用。

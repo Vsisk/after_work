@@ -32,17 +32,18 @@ class ResourceNormalizer:
             for index, child in enumerate(node.children):
                 segment = child.name or child.id or f"node{index}"
                 path = f"{parent_path}.{segment}" if parent_path else segment
-                resource_id = f"context:{path}"
-                domain = path.split(".")[1] if "." in path else "default"
-                registry[resource_id] = ContextResource(
-                    resource_id=resource_id,
-                    name=child.name,
-                    path=path,
-                    scope="global",
-                    domain=domain,
-                    description=child.description,
-                    tags=["context_json", child.metadata.get("raw_value_source_type", "")],
-                )
+                if not child.children:
+                    resource_id = f"context:{path}"
+                    domain = path.split(".")[1] if "." in path else "default"
+                    registry[resource_id] = ContextResource(
+                        resource_id=resource_id,
+                        name=child.name,
+                        path=path,
+                        scope="global",
+                        domain=domain,
+                        description=child.description,
+                        tags=["context_json", child.metadata.get("raw_value_source_type", ""), "leaf_only"],
+                    )
                 walk(child, path)
 
         walk(root, "$ctx$")
@@ -55,7 +56,7 @@ class ResourceNormalizer:
     ) -> None:
         for node in sorted(normalized_nodes.values(), key=lambda item: (item.depth, item.access_path)):
             path = node.access_path
-            if not path:
+            if not path or not node.is_leaf:
                 continue
             resource_id = f"context:{path}"
             domain = path.split(".")[1] if "." in path else "default"
@@ -66,7 +67,7 @@ class ResourceNormalizer:
                 scope="global",
                 domain=domain,
                 description=node.annotation,
-                tags=["context_json", node.context_kind, node.source_type],
+                tags=["context_json", node.context_kind, node.source_type, "leaf_only"],
             )
 
     def _normalize_bos(self, loaded: LoadedResources) -> dict[str, BOResource]:
