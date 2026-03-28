@@ -3,3 +3,5 @@
 - 2026-03-28 需求执行记录：根据评审反馈收敛 global context 结构假设，移除 `global_context.custom_context/system_context` 合并分支，改为仅按 `global_context -> sub_properties` 直接解析；其余 `sub_gobal_context` 与递归 normalize 逻辑保持不变。
 - 2026-03-28 需求执行记录：针对“load 后又 normalize 一次”反馈，调整 `ResourceNormalizer` 直接消费 `ContextRegistry.nodes_by_id` 产出 `ContextResource`，避免 context 树再次结构归一化；新增对应单测样例。
 - 2026-03-28 需求执行记录：补充“非叶子 context 不可直接引用”约束，`ResourceNormalizer` 仅将 `is_leaf=True` 节点写入 `registry.contexts`，并更新相关单测断言与文档。
+- 2026-03-28 需求执行记录：完成 function 资源链路参数类型增强（loader/normalize 兼容 `data_type`+`type`、返回类型归一化、FunctionRegistry by id/name、ResourceManager function candidate 带参数类型、PlanValidator 函数参数个数与基础类型校验/warning）；补充 function 类型相关测试与设计/计划文档，`pytest` 受当前环境 pydantic+typing 兼容问题未完成。
+- 2026-03-28 需求执行记录：根据评审意见调整 `EnvironmentBuilder` 对 function registry 的处理，改为与 contexts/bos/functions 一致的“工作副本”语义：先复制 `functions`，再基于复制后的函数集合克隆 `function_registry`，避免直接引用原 registry 引发不一致。

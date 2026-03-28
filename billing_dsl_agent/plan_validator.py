@@ -32,6 +32,7 @@ from billing_dsl_agent.models import (
     FieldAccessPlanNode,
     LiteralPlanNode,
 )
+from billing_dsl_agent.resource_manager import normalize_function_type
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -346,6 +347,40 @@ def _validate_expr_semantics(
                         f"{path}.args",
                     )
                 )
+            param_defs = list(getattr(function, "param_defs", []) or [])
+            if param_defs:
+                for arg_index, expected in enumerate(param_defs):
+                    if arg_index >= len(expr.args):
+                        break
+                    if expected.normalized_param_type == "unknown":
+                        issues.append(
+                            issue(
+                                "function_param_type_unknown",
+                                f"function param type unresolved: {function_id}.{expected.param_name}",
+                                f"{path}.args[{arg_index}]",
+                                severity="warning",
+                            )
+                        )
+                        continue
+                    actual_ref = _infer_expr_type(expr.args[arg_index], env)
+                    if actual_ref.normalized_type == "unknown":
+                        issues.append(
+                            issue(
+                                "function_arg_type_unresolved",
+                                f"function arg type unresolved for {function_id}.{expected.param_name}",
+                                f"{path}.args[{arg_index}]",
+                                severity="warning",
+                            )
+                        )
+                        continue
+                    if expected.normalized_param_type != actual_ref.normalized_type:
+                        issues.append(
+                            issue(
+                                "function_arg_type_mismatch",
+                                f"function arg type mismatch for {function_id}.{expected.param_name}: expected={expected.normalized_param_type}, actual={actual_ref.normalized_type}",
+                                f"{path}.args[{arg_index}]",
+                            )
+                        )
         for arg_index, argument in enumerate(expr.args):
             issues.extend(_validate_expr_semantics(argument, env, f"{path}.args[{arg_index}]"))
         return issues
@@ -802,12 +837,48 @@ def _resolve_bo(expr: QueryCallPlanNode, env: FilteredEnvironment) -> tuple[str 
 
 def _resolve_function(expr: FunctionCallPlanNode, env: FilteredEnvironment) -> tuple[str | None, Any | None]:
     registry = env.registry
+    function_registry = getattr(registry, "function_registry", None)
     if expr.function_id and expr.function_id in registry.functions:
         return expr.function_id, registry.functions[expr.function_id]
+    if expr.function_id and function_registry is not None:
+        by_id = getattr(function_registry, "functions_by_id", {})
+        if expr.function_id in by_id:
+            return expr.function_id, by_id[expr.function_id]
     for function_id, function in registry.functions.items():
         if function.full_name == expr.function_name or function.name == expr.function_name:
             return function_id, function
+    if expr.function_name and function_registry is not None:
+        by_name = getattr(function_registry, "functions_by_name", {})
+        matched = by_name.get(expr.function_name) or []
+        if len(matched) == 1:
+            return matched[0].resource_id, matched[0]
     return None, None
+
+
+def _infer_expr_type(expr: ExprPlanNode, env: FilteredEnvironment) -> Any:
+    if isinstance(expr, LiteralPlanNode):
+        value = expr.value
+        if isinstance(value, bool):
+            return normalize_function_type("boolean")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return normalize_function_type("int")
+        if isinstance(value, float):
+            return normalize_function_type("double")
+        if isinstance(value, str):
+            return normalize_function_type("string")
+        return normalize_function_type(None)
+    if isinstance(expr, ListLiteralPlanNode):
+        if not expr.items:
+            return normalize_function_type("list[unknown]")
+        first_type = _infer_expr_type(expr.items[0], env)
+        if first_type.normalized_type == "unknown":
+            return normalize_function_type("list[unknown]")
+        return normalize_function_type(f"list[{first_type.normalized_type}]")
+    if isinstance(expr, FunctionCallPlanNode):
+        _, fn = _resolve_function(expr, env)
+        if fn is not None and getattr(fn, "return_type", ""):
+            return normalize_function_type(getattr(fn, "return_type_raw", "") or getattr(fn, "return_type", ""))
+    return normalize_function_type(None)
 
 
 def _bo_has_field(bo: Any, field_name: str) -> bool:

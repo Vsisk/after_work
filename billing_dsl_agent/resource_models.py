@@ -27,9 +27,12 @@ class CandidateBO:
 
 @dataclass(slots=True)
 class CandidateFunction:
+    function_id: str
+    function_name: str
     full_name: str
     description: str = ""
-    params: List[str] = field(default_factory=list)
+    normalized_return_type: str = ""
+    params: List[Dict[str, str]] = field(default_factory=list)
     score: float = 0.0
     source: str = "function"
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -50,5 +53,6 @@ class ResourceIndexes:
     bo_by_name: Dict[str, Any] = field(default_factory=dict)
     bo_field_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     naming_sql_by_name: Dict[str, Any] = field(default_factory=dict)
+    function_by_id: Dict[str, Any] = field(default_factory=dict)
     function_by_full_name: Dict[str, Any] = field(default_factory=dict)
     function_by_name: Dict[str, List[Any]] = field(default_factory=dict)

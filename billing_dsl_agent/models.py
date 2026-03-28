@@ -44,9 +44,16 @@ class FunctionResource:
     name: str
     full_name: str
     description: str = ""
+    function_kind: str = "func"
     signature: str = ""
+    signature_display: str = ""
     params: List[str] = field(default_factory=list)
+    param_defs: List["FunctionParamResource"] = field(default_factory=list)
+    return_type_raw: str = ""
     return_type: str = ""
+    return_type_ref: "NormalizedTypeRef" | None = None
+    source_metadata: Dict[str, Any] = field(default_factory=dict)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
     scope: str = "func"
     tags: List[str] = field(default_factory=list)
 
@@ -56,7 +63,37 @@ class ResourceRegistry:
     contexts: Dict[str, ContextResource] = field(default_factory=dict)
     bos: Dict[str, BOResource] = field(default_factory=dict)
     functions: Dict[str, FunctionResource] = field(default_factory=dict)
+    function_registry: "FunctionRegistry" | None = None
     edsl_tree: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class NormalizedTypeRef:
+    raw_type: str = ""
+    normalized_type: str = "unknown"
+    category: str = "unknown"
+    is_list: bool = False
+    item_type: str | None = None
+    is_unknown: bool = True
+
+
+@dataclass(slots=True)
+class FunctionParamResource:
+    param_id: str
+    param_name: str
+    param_type_raw: str = ""
+    normalized_param_type: str = "unknown"
+    type_ref: NormalizedTypeRef | None = None
+    is_list: bool = False
+    item_type: str | None = None
+    is_optional: bool | None = None
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class FunctionRegistry:
+    functions_by_id: Dict[str, FunctionResource] = field(default_factory=dict)
+    functions_by_name: Dict[str, List[FunctionResource]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

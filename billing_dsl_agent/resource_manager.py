@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from billing_dsl_agent.models import NormalizedTypeRef
 from billing_dsl_agent.resource_models import (
     CandidateBO,
     CandidateContext,
@@ -43,6 +45,7 @@ class ResourceManager:
         bo_by_name: Dict[str, Any] = {}
         bo_field_index: Dict[str, Dict[str, Any]] = defaultdict(dict)
         naming_sql_by_name: Dict[str, Any] = {}
+        function_by_id: Dict[str, Any] = {}
         function_by_full_name: Dict[str, Any] = {}
         function_by_name: Dict[str, List[Any]] = defaultdict(list)
 
@@ -69,6 +72,9 @@ class ResourceManager:
             full_name = self._function_full_name(fn)
             if not full_name:
                 continue
+            function_id = self._first_text(fn, "function_id", "id", "resource_id")
+            if function_id:
+                function_by_id[self._norm(function_id)] = fn
             function_by_full_name[self._norm(full_name)] = fn
             function_by_name[self._norm(full_name.split(".")[-1])].append(fn)
 
@@ -78,6 +84,7 @@ class ResourceManager:
             bo_by_name=bo_by_name,
             bo_field_index=dict(bo_field_index),
             naming_sql_by_name=naming_sql_by_name,
+            function_by_id=function_by_id,
             function_by_full_name=function_by_full_name,
             function_by_name=dict(function_by_name),
         )
@@ -116,12 +123,23 @@ class ResourceManager:
                             "description": self._safe_text(func_row.get("func_desc")) or class_desc,
                             "scope": self._safe_text(func_row.get("func_scope")) or ("global" if source_type == "native" else "custom"),
                             "source_type": source_type,
+                            "function_kind": "native_func" if source_key == "native_func" else "func",
                             "shared_object": self._safe_text(func_row.get("func_so")),
                             "expression_type": self._safe_text((func_row.get("func_content") or {}).get("expression_type")),
                             "expression": self._safe_text((func_row.get("func_content") or {}).get("expression")),
                             "cdsl": self._safe_text((func_row.get("func_content") or {}).get("cdsl")),
                             "params": self._normalize_param_list(func_row.get("param_list")),
                             "return_type": self._normalize_return_type(func_row.get("return_type")),
+                            "return_type_raw": self._extract_return_type_raw(func_row.get("return_type")),
+                            "normalized_return_type_ref": asdict(
+                                normalize_function_type(self._extract_return_type_raw(func_row.get("return_type")))
+                            ),
+                            "source_metadata": {
+                                "source_key": source_key,
+                                "class_name": class_name,
+                                "scope": self._safe_text(func_row.get("func_scope")),
+                            },
+                            "raw_payload": dict(func_row),
                         }
                     )
 
@@ -197,8 +215,11 @@ class ResourceManager:
             ],
             "function_candidates": [
                 {
+                    "function_id": item.function_id,
+                    "function_name": item.full_name,
                     "name": item.full_name,
                     "description": item.description,
+                    "normalized_return_type": item.normalized_return_type,
                     "params": item.params,
                 }
                 for item in candidate_set.function_candidates
@@ -295,13 +316,23 @@ class ResourceManager:
         for norm_name, fn in indexes.function_by_full_name.items():
             full_name = self._function_full_name(fn)
             description = self._first_text(fn, "description", "func_desc", "desc")
+            function_id = self._first_text(fn, "function_id", "id", "resource_id") or full_name
+            function_name = self._first_text(fn, "name", "function_name", "func_name") or full_name.split(".")[-1]
             params = self._function_params(fn)
-            score = self._match_score(terms, [full_name, full_name.split(".")[-1], description, " ".join(params)])
+            param_names = [item.get("param_name", "") for item in params]
+            score = self._match_score(terms, [full_name, full_name.split(".")[-1], description, " ".join(param_names)])
             if score <= 0:
                 continue
             candidate = scores.get(norm_name)
             if candidate is None:
-                candidate = CandidateFunction(full_name=full_name, description=description, params=params)
+                candidate = CandidateFunction(
+                    function_id=function_id,
+                    function_name=function_name,
+                    full_name=full_name,
+                    description=description,
+                    normalized_return_type=self._function_return_type(fn),
+                    params=params,
+                )
                 scores[norm_name] = candidate
             candidate.score += score
             trace.append(f"[{stage}] function:{full_name} +{score:.2f}")
@@ -494,16 +525,32 @@ class ResourceManager:
             return f"{class_name}.{func_name}"
         return func_name
 
-    def _function_params(self, fn: Any) -> List[str]:
+    def _function_params(self, fn: Any) -> List[Dict[str, str]]:
         raw = self._first_non_none(fn, "params", "param_list", "arguments")
         if isinstance(raw, list):
-            values: List[str] = []
+            values: List[Dict[str, str]] = []
             for item in raw:
                 if isinstance(item, str):
-                    values.append(item)
+                    normalized_ref = normalize_function_type(None)
+                    values.append(
+                        {
+                            "param_name": item,
+                            "param_type": normalized_ref.normalized_type,
+                            "raw_type": "",
+                        }
+                    )
                 else:
-                    values.append(self._first_text(item, "name", "param_name", "id"))
-            return [value for value in values if value]
+                    param_name = self._first_text(item, "name", "param_name", "id")
+                    param_type_raw = self._first_text(item, "param_type_raw", "data_type", "type", "data_type_name")
+                    normalized_ref = normalize_function_type(param_type_raw)
+                    values.append(
+                        {
+                            "param_name": param_name,
+                            "param_type": normalized_ref.normalized_type,
+                            "raw_type": param_type_raw,
+                        }
+                    )
+            return [value for value in values if value.get("param_name")]
         return []
 
     def _normalize_param_list(self, raw_params: Any) -> List[Dict[str, Any]]:
@@ -514,29 +561,55 @@ class ResourceManager:
             if not isinstance(row, dict):
                 continue
             param_name = self._safe_text(row.get("param_name")) or f"param_{idx}"
+            param_type_raw = self._safe_text(row.get("data_type")) or self._safe_text(row.get("type")) or self._safe_text(
+                row.get("data_type_name")
+            )
+            normalized_type_ref = normalize_function_type(param_type_raw)
             params.append(
                 {
+                    "param_id": self._safe_text(row.get("param_id")) or f"{param_name}:{idx}",
                     "param_name": param_name,
+                    "param_type_raw": param_type_raw,
+                    "normalized_param_type": normalized_type_ref.normalized_type,
+                    "type_ref": asdict(normalized_type_ref),
                     "data_type": self._safe_text(row.get("data_type")),
+                    "type": self._safe_text(row.get("type")),
                     "data_type_name": self._safe_text(row.get("data_type_name")),
-                    "is_list": bool(row.get("is_list", False)),
+                    "is_list": bool(row.get("is_list", False) or normalized_type_ref.is_list),
+                    "item_type": normalized_type_ref.item_type,
+                    "is_optional": row.get("is_optional"),
                     "is_output": bool(row.get("is_output", False)),
+                    "raw_payload": dict(row),
                 }
             )
         return params
 
     def _normalize_return_type(self, return_type: Any) -> Dict[str, Any]:
+        raw_type = self._extract_return_type_raw(return_type)
+        normalized_type = normalize_function_type(raw_type)
         if not isinstance(return_type, dict):
-            return {
-                "data_type": "",
-                "data_type_name": "",
-                "is_list": False,
-            }
+            return {"data_type": "", "data_type_name": raw_type, "is_list": normalized_type.is_list}
         return {
             "data_type": self._safe_text(return_type.get("data_type")),
-            "data_type_name": self._safe_text(return_type.get("data_type_name")),
-            "is_list": bool(return_type.get("is_list", False)),
+            "data_type_name": self._safe_text(return_type.get("data_type_name")) or raw_type,
+            "is_list": bool(return_type.get("is_list", False) or normalized_type.is_list),
         }
+
+    def _extract_return_type_raw(self, return_type: Any) -> str:
+        if isinstance(return_type, dict):
+            return (
+                self._safe_text(return_type.get("data_type_name"))
+                or self._safe_text(return_type.get("data_type"))
+                or self._safe_text(return_type.get("type"))
+            )
+        return self._safe_text(return_type)
+
+    def _function_return_type(self, fn: Any) -> str:
+        type_ref = self._first_non_none(fn, "return_type_ref", "normalized_return_type_ref")
+        if isinstance(type_ref, dict):
+            return self._safe_text(type_ref.get("normalized_type")) or "unknown"
+        raw_return_type = self._extract_return_type_raw(self._first_non_none(fn, "return_type", "return_type_raw"))
+        return normalize_function_type(raw_return_type).normalized_type
 
     def _first_text(self, item: Any, *keys: str) -> str:
         value = self._first_non_none(item, *keys)
@@ -583,4 +656,51 @@ def build_candidate_prompt_payload(
         bo_registry_or_list=bo_registry_or_list,
         function_registry_or_list=function_registry_or_list,
         budget=budget,
+    )
+
+
+def normalize_function_type(type_value: str | None) -> NormalizedTypeRef:
+    raw_type = (type_value or "").strip()
+    if not raw_type:
+        return NormalizedTypeRef(raw_type="", normalized_type="unknown", category="unknown", is_unknown=True)
+    compact = re.sub(r"\s+", "", raw_type)
+    lower = compact.lower()
+    list_match = re.match(r"^(?:list|array)\s*(?:<|\[)\s*([a-z0-9_$.]+)\s*(?:>|\])$", lower)
+    if list_match:
+        item_raw = list_match.group(1)
+        item_ref = normalize_function_type(item_raw)
+        normalized_item = item_ref.normalized_type if not item_ref.is_unknown else item_raw
+        return NormalizedTypeRef(
+            raw_type=raw_type,
+            normalized_type=f"list[{normalized_item}]",
+            category="collection",
+            is_list=True,
+            item_type=normalized_item,
+            is_unknown=False,
+        )
+    alias_map = {
+        "int": "int",
+        "integer": "int",
+        "long": "long",
+        "string": "string",
+        "str": "string",
+        "bool": "boolean",
+        "boolean": "boolean",
+        "float": "float",
+        "double": "double",
+        "map": "map",
+    }
+    normalized = alias_map.get(lower)
+    if normalized:
+        return NormalizedTypeRef(
+            raw_type=raw_type,
+            normalized_type=normalized,
+            category="basic" if normalized not in {"map"} else "object",
+            is_unknown=False,
+        )
+    return NormalizedTypeRef(
+        raw_type=raw_type,
+        normalized_type="unknown",
+        category="unknown",
+        is_unknown=True,
     )

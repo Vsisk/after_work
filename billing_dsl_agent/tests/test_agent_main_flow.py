@@ -123,7 +123,12 @@ def _dataset() -> dict:
                             {
                                 "func_name": "Upper",
                                 "func_desc": "uppercase string",
-                                "param_list": [{"param_name": "value"}],
+                                "param_list": [{"param_name": "value", "type": "String"}],
+                            },
+                            {
+                                "func_name": "Now",
+                                "func_desc": "return now",
+                                "param_list": [],
                             }
                         ],
                     }
@@ -177,6 +182,12 @@ def test_loader_normalization_and_filtering_pipeline() -> None:
     assert filtered.selected_global_context_ids
     assert filtered.selected_bo_ids
     assert filtered.selected_function_ids
+    fn = filtered.registry.functions["function:Customer.GetSalutation"]
+    assert fn.return_type == "string"
+    assert fn.param_defs[0].normalized_param_type == "unknown"
+    assert filtered.registry.functions["function:String.Now"].param_defs == []
+    assert filtered.registry.function_registry is not None
+    assert "Customer.GetSalutation" in filtered.registry.function_registry.functions_by_name
 
 
 def test_local_context_inherits_from_edsl_ancestors() -> None:
