@@ -18,6 +18,7 @@
 2. 引入 `normalize_context_root` / `normalize_context_property` 递归展开。
 3. 新增 `is_expandable_context_type`，统一判定可展开类型：`bo|logic|extattr`。
 4. 增强 `ContextRegistry`，新增节点索引与 root/descendant 结构化索引。
+5. `ResourceNormalizer` 直接消费 `ContextRegistry.nodes_by_id` 构建 `ContextResource`，避免对 context 树做二次结构归一化。
 
 ## WHY
 - 与真实输入协议对齐，避免 `sub_gobal_context` 丢失。

@@ -13,3 +13,6 @@
 ## Stage 3：测试与回归
 - Task 3.1：改造 `test_context_loader.py` 覆盖容器输入、双 root、`context_kind`、递归与叶子判定。
 - Task 3.2：覆盖 `sub_gobal_context` 兼容性与 registry 双索引检索。
+
+## Stage 4：消费链路去重
+- Task 4.1：`ResourceNormalizer` 优先使用 `ContextRegistry.nodes_by_id` 生成 `ContextResource`，避免重复结构 normalize。

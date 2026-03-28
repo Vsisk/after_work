@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import List
 
 from billing_dsl_agent.bo_models import BODef
-from billing_dsl_agent.context_models import ContextPropertyDef
+from billing_dsl_agent.context_models import ContextPropertyDef, NormalizedContextNode
 from billing_dsl_agent.models import BOResource, ContextResource, FunctionResource, ResourceRegistry
 from billing_dsl_agent.resource_loader import LoadedResources
 
@@ -19,6 +19,11 @@ class ResourceNormalizer:
 
     def _normalize_global_contexts(self, loaded: LoadedResources) -> dict[str, ContextResource]:
         registry: dict[str, ContextResource] = {}
+        normalized_nodes = loaded.context_registry.nodes_by_id
+        if normalized_nodes:
+            self._build_context_resources_from_normalized_nodes(normalized_nodes, registry)
+            return registry
+
         root = loaded.context_registry.global_root
         if root is None:
             return registry
@@ -42,6 +47,27 @@ class ResourceNormalizer:
 
         walk(root, "$ctx$")
         return registry
+
+    def _build_context_resources_from_normalized_nodes(
+        self,
+        normalized_nodes: dict[str, NormalizedContextNode],
+        registry: dict[str, ContextResource],
+    ) -> None:
+        for node in sorted(normalized_nodes.values(), key=lambda item: (item.depth, item.access_path)):
+            path = node.access_path
+            if not path:
+                continue
+            resource_id = f"context:{path}"
+            domain = path.split(".")[1] if "." in path else "default"
+            registry[resource_id] = ContextResource(
+                resource_id=resource_id,
+                name=node.property_name,
+                path=path,
+                scope="global",
+                domain=domain,
+                description=node.annotation,
+                tags=["context_json", node.context_kind, node.source_type],
+            )
 
     def _normalize_bos(self, loaded: LoadedResources) -> dict[str, BOResource]:
         registry: dict[str, BOResource] = {}
