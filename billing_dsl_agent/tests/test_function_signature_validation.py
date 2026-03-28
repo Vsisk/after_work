@@ -2,7 +2,6 @@ from billing_dsl_agent.models import (
     FilteredEnvironment,
     FunctionCallPlanNode,
     FunctionParamResource,
-    FunctionRegistry,
     FunctionResource,
     LiteralPlanNode,
     NormalizedTypeRef,
@@ -38,14 +37,7 @@ def _build_function(
 
 def _build_env(functions: list[FunctionResource]) -> FilteredEnvironment:
     function_map = {item.resource_id: item for item in functions}
-    by_id: dict[str, FunctionResource] = {}
-    for fn in functions:
-        by_id[fn.resource_id] = fn
-        by_id[fn.function_id] = fn
-    registry = ResourceRegistry(
-        functions=function_map,
-        function_registry=FunctionRegistry(functions_by_id=by_id),
-    )
+    registry = ResourceRegistry(functions=function_map)
     return FilteredEnvironment(registry=registry, selected_function_ids=list(function_map.keys()))
 
 
@@ -53,7 +45,7 @@ def _codes(issues: list[ValidationIssue]) -> set[str]:
     return {item.code for item in issues}
 
 
-def test_function_registry_resolve_by_id_and_name() -> None:
+def test_function_resolve_by_id_and_name() -> None:
     param = FunctionParamResource(
         param_id="p1",
         param_name="gender",

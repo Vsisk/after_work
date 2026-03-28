@@ -837,13 +837,8 @@ def _resolve_bo(expr: QueryCallPlanNode, env: FilteredEnvironment) -> tuple[str 
 
 def _resolve_function(expr: FunctionCallPlanNode, env: FilteredEnvironment) -> tuple[str | None, Any | None]:
     registry = env.registry
-    function_registry = getattr(registry, "function_registry", None)
     if expr.function_id and expr.function_id in registry.functions:
         return expr.function_id, registry.functions[expr.function_id]
-    if expr.function_id and function_registry is not None:
-        by_id = getattr(function_registry, "functions_by_id", {})
-        if expr.function_id in by_id:
-            return expr.function_id, by_id[expr.function_id]
     for function_id, function in registry.functions.items():
         if function.full_name == expr.function_name or function.name == expr.function_name:
             return function_id, function

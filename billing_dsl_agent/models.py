@@ -63,7 +63,6 @@ class ResourceRegistry:
     contexts: Dict[str, ContextResource] = field(default_factory=dict)
     bos: Dict[str, BOResource] = field(default_factory=dict)
     functions: Dict[str, FunctionResource] = field(default_factory=dict)
-    function_registry: "FunctionRegistry" | None = None
     edsl_tree: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -88,11 +87,6 @@ class FunctionParamResource:
     item_type: str | None = None
     is_optional: bool | None = None
     raw_payload: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class FunctionRegistry:
-    functions_by_id: Dict[str, FunctionResource] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

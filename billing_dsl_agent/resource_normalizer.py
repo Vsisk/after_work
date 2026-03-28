@@ -9,7 +9,6 @@ from billing_dsl_agent.models import (
     BOResource,
     ContextResource,
     FunctionParamResource,
-    FunctionRegistry,
     FunctionResource,
     ResourceRegistry,
 )
@@ -22,12 +21,11 @@ class ResourceNormalizer:
     def normalize(self, loaded: LoadedResources) -> ResourceRegistry:
         contexts = self._normalize_global_contexts(loaded)
         bos = self._normalize_bos(loaded)
-        functions, function_registry = self._normalize_functions(loaded)
+        functions = self._normalize_functions(loaded)
         return ResourceRegistry(
             contexts=contexts,
             bos=bos,
             functions=functions,
-            function_registry=function_registry,
             edsl_tree=dict(loaded.edsl_tree or {}),
         )
 
@@ -126,9 +124,8 @@ class ResourceNormalizer:
         add_items(loaded.bo_registry.custom_bos, "custom")
         return registry
 
-    def _normalize_functions(self, loaded: LoadedResources) -> tuple[dict[str, FunctionResource], FunctionRegistry]:
+    def _normalize_functions(self, loaded: LoadedResources) -> dict[str, FunctionResource]:
         registry: dict[str, FunctionResource] = {}
-        functions_by_id: dict[str, FunctionResource] = {}
         for row in loaded.function_payload.get("functions") or []:
             full_name = str(row.get("full_name") or row.get("name") or "").strip()
             if not full_name:
@@ -203,6 +200,4 @@ class ResourceNormalizer:
                 tags=[str(row.get("source_type") or "func")],
             )
             registry[resource_id] = function_resource
-            functions_by_id[function_resource.resource_id] = function_resource
-            functions_by_id[function_resource.function_id] = function_resource
-        return registry, FunctionRegistry(functions_by_id=functions_by_id)
+        return registry

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import List
 
 from billing_dsl_agent.context_selector import ContextSelector
-from billing_dsl_agent.models import FilteredEnvironment, FunctionRegistry, NodeDef, ResourceRegistry
+from billing_dsl_agent.models import FilteredEnvironment, NodeDef, ResourceRegistry
 from billing_dsl_agent.semantic_selector import CandidateSummary, MockSemanticSelector, SemanticSelector
 
 
@@ -13,12 +13,10 @@ class EnvironmentBuilder:
     semantic_selector: SemanticSelector = field(default_factory=MockSemanticSelector)
 
     def build_filtered_environment(self, node_info: NodeDef, user_query: str, registry: ResourceRegistry) -> FilteredEnvironment:
-        functions = dict(registry.functions)
         working_registry = ResourceRegistry(
             contexts=dict(registry.contexts),
             bos=dict(registry.bos),
-            functions=functions,
-            function_registry=self._clone_function_registry(registry.function_registry, functions),
+            functions=dict(registry.functions),
             edsl_tree=dict(registry.edsl_tree),
         )
         context_selector = ContextSelector(semantic_selector=self.semantic_selector)
@@ -67,16 +65,6 @@ class EnvironmentBuilder:
             for fn in registry.functions.values()
         ]
         return self.semantic_selector.select("function", node_info, user_query, candidates)
-
-    def _clone_function_registry(
-        self,
-        function_registry: FunctionRegistry | None,
-        functions: Dict[str, object],
-    ) -> FunctionRegistry | None:
-        if function_registry is None:
-            return None
-        copied_by_id = {key: value for key, value in function_registry.functions_by_id.items() if value in functions.values()}
-        return FunctionRegistry(functions_by_id=copied_by_id)
 
     def _recall_domains(self, node_info: NodeDef, user_query: str, domains: set[str]) -> set[str]:
         text = f"{node_info.node_name} {node_info.node_path} {node_info.description} {user_query}".lower()
