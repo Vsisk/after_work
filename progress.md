@@ -1,1 +1,2 @@
 - 2026-03-27 需求执行记录：完成 select/select_one 与 fetch/fetch_one 专项改造（查询 AST 扩展、query 语义校验、naming-sql 参数一致性校验、fetch 渲染 naming-sql 名称、repair prompt/plan prompt 更新、主流程测试补充）；未改动其他表达式类型语义。
+- 2026-03-28 需求执行记录：完成 DSLAgent datatype 同链路生成改造（runtime config 归一化与 fail-fast 校验、datatype 分类与默认补全、统一 expression/datatype 校验、响应新增 datatype 与 debug 字段），补充 time/money/simple_string 与非法配置/非法表达式测试及设计文档、开发计划落盘。

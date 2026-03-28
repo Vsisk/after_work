@@ -7,6 +7,27 @@ from billing_dsl_agent.resource_normalizer import ResourceNormalizer
 from billing_dsl_agent.semantic_selector import MockSemanticSelector
 
 
+def _global_config() -> dict:
+    return {
+        "site_level_config": {
+            "time_type_config": {
+                "region_id_expression": "$ctx$.customer.id",
+                "time_format_expression": '"yyyyMMddHHmmss"',
+            },
+            "money_type_config": {
+                "currency_id_expression": "$ctx$.customer.id",
+                "int_delimiter_expression": "','",
+                "intp_delimiter_expression": "'.'",
+                "round_method_expression": "3",
+                "currency_unit": "B",
+                "decimal_precision": "2",
+                "zero_padding": "Y",
+            },
+            "flow_type_config": {"flow_type_expression": "$ctx$.customer.id"},
+        }
+    }
+
+
 def _dataset() -> dict:
     return {
         ("site-a", "proj-1"): {
@@ -133,9 +154,13 @@ def _dataset() -> dict:
     }
 
 
-def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> GenerateDSLRequest:
+def _request(
+    is_ab: bool = False,
+    ab_sources: list[str] | None = None,
+    user_requirement: str = "generate title from customer gender",
+) -> GenerateDSLRequest:
     return GenerateDSLRequest(
-        user_requirement="generate title from customer gender",
+        user_requirement=user_requirement,
         site_id="site-a",
         project_id="proj-1",
         node_def=NodeDef(
@@ -154,7 +179,12 @@ def _build_agent(plan_response: dict, repair_response: dict | None = None) -> DS
     loader = ResourceLoader(provider=provider)
     planner = LLMPlanner(StubOpenAIClient(plan_response=plan_response, repair_response=repair_response))
     env_builder = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4))
-    return DSLAgent(llm_planner=planner, resource_loader=loader, environment_builder=env_builder)
+    return DSLAgent(
+        llm_planner=planner,
+        resource_loader=loader,
+        environment_builder=env_builder,
+        global_config=_global_config(),
+    )
 
 
 def _build_filtered_env():
@@ -227,6 +257,8 @@ def test_planner_only_sees_filtered_ids() -> None:
     assert payload is not None
     assert "selected_function_ids" in payload["environment"]
     assert "function:Customer.GetSalutation" in payload["environment"]["selected_function_ids"]
+    assert response.datatype
+    assert response.datatype["data_type"] == "simple_string"
 
 
 def test_generate_dsl_renders_program_defs_and_final_expression() -> None:
@@ -279,6 +311,7 @@ def test_generate_dsl_renders_program_defs_and_final_expression() -> None:
         'def title_prefix = if(customer_gender == "M", "MR.", "MS.")',
         "title_prefix",
     ]
+    assert response.datatype["data_type"] == "simple_string"
 
 
 def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
@@ -298,6 +331,46 @@ def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
     assert response.success is False
     assert response.failure_reason == "plan validation failed"
     assert response.validation is not None
+
+
+def test_time_datatype_uses_runtime_default() -> None:
+    plan = {"definitions": [], "return_expr": {"type": "context_ref", "path": "$ctx$.customer.id"}}
+    agent = _build_agent(plan)
+    response = agent.generate_dsl(_request(user_requirement="请把时间展示出来"))
+    assert response.success is True
+    assert response.datatype == {
+        "data_type": "time",
+        "region_id_expression": "$ctx$.customer.id",
+        "time_format_expression": '"yyyyMMddHHmmss"',
+    }
+
+
+def test_time_datatype_overrides_default_format() -> None:
+    plan = {"definitions": [], "return_expr": {"type": "context_ref", "path": "$ctx$.customer.id"}}
+    agent = _build_agent(plan)
+    response = agent.generate_dsl(_request(user_requirement="时间格式请使用 yyyy-MM-dd HH:mm:ss"))
+    assert response.success is True
+    assert response.datatype["data_type"] == "time"
+    assert response.datatype["time_format_expression"] == '"yyyy-MM-dd HH:mm:ss"'
+
+
+def test_money_datatype_uses_runtime_default() -> None:
+    plan = {"definitions": [], "return_expr": {"type": "context_ref", "path": "$ctx$.customer.id"}}
+    agent = _build_agent(plan)
+    response = agent.generate_dsl(_request(user_requirement="格式化金额并输出币种"))
+    assert response.success is True
+    assert response.datatype["data_type"] == "money"
+    assert response.datatype["currency_id_expression"] == "$ctx$.customer.id"
+    assert response.datatype["decimal_precision"] == "2"
+
+
+def test_money_datatype_override_currency_expression() -> None:
+    plan = {"definitions": [], "return_expr": {"type": "context_ref", "path": "$ctx$.customer.id"}}
+    agent = _build_agent(plan)
+    response = agent.generate_dsl(_request(user_requirement="金额显示使用币种字段 $ctx$.customer.id"))
+    assert response.success is True
+    assert response.datatype["data_type"] == "money"
+    assert response.datatype["currency_id_expression"] == "$ctx$.customer.id"
     assert any(item.code == "undefined_var_ref" for item in response.validation.issues)
 
 

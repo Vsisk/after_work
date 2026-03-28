@@ -312,6 +312,9 @@ class GenerateDSLResponse(StrictModel):
     plan: ProgramPlan | None = None
     ast: ProgramNode | None = None
     validation: ValidationResult | None = None
+    datatype: Dict[str, Any] = Field(default_factory=dict)
+    datatype_plan: Dict[str, Any] | None = None
+    datatype_validation: Dict[str, Any] | None = None
     failure_reason: str = ""
 
 
