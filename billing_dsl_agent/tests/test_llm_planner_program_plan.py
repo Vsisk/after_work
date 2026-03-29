@@ -1,0 +1,76 @@
+from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
+from billing_dsl_agent.models import FilteredEnvironment, NodeDef, ResourceRegistry, ValidationIssue
+
+
+def _env() -> FilteredEnvironment:
+    return FilteredEnvironment(
+        registry=ResourceRegistry(),
+        selected_global_context_ids=["context:$ctx$.customer.gender"],
+        selected_local_context_ids=["local:$local$.invoiceId"],
+        selected_bo_ids=["bo:CustomerBO"],
+        selected_function_ids=["function:Customer.GetSalutation"],
+    )
+
+
+def _node() -> NodeDef:
+    return NodeDef(node_id="n1", node_path="invoice.customer.title", node_name="title")
+
+
+def test_llm_planner_returns_program_plan() -> None:
+    planner = LLMPlanner(
+        StubOpenAIClient(
+            plan_response={
+                "definitions": [
+                    {
+                        "kind": "variable",
+                        "name": "customer_gender",
+                        "expr": {"type": "context_ref", "path": "$ctx$.customer.gender"},
+                    }
+                ],
+                "return_expr": {"type": "var_ref", "name": "customer_gender"},
+            }
+        )
+    )
+    plan = planner.plan("generate title", _node(), _env())
+    assert plan.definitions[0].name == "customer_gender"
+    assert plan.return_expr.type == "var_ref"
+
+
+def test_llm_planner_adapts_legacy_payload() -> None:
+    planner = LLMPlanner(
+        StubOpenAIClient(
+            plan_response={
+                "intent_summary": "legacy function call",
+                "expression_pattern": "function_call",
+                "context_refs": ["context:$ctx$.customer.gender"],
+                "function_refs": ["function:Customer.GetSalutation"],
+                "semantic_slots": {"function_args": ["context:$ctx$.customer.gender"]},
+            }
+        )
+    )
+    plan = planner.plan("generate title", _node(), _env())
+    assert plan.legacy_plan is not None
+    assert plan.return_expr.type == "function_call"
+
+
+def test_llm_planner_repair_payload_contains_structured_issues() -> None:
+    client = StubOpenAIClient(
+        plan_response={
+            "definitions": [],
+            "return_expr": {"type": "literal", "value": "ok"},
+        },
+        repair_response={
+            "definitions": [],
+            "return_expr": {"type": "literal", "value": "fixed"},
+        },
+    )
+    planner = LLMPlanner(client)
+    invalid_plan = planner.plan("generate title", _node(), _env())
+    repaired = planner.repair(
+        invalid_plan,
+        _env(),
+        [ValidationIssue(code="undefined_var_ref", message="missing variable", path="return_expr")],
+    )
+    assert repaired is not None
+    assert client.last_payload is not None
+    assert client.last_payload["issues"][0]["code"] == "undefined_var_ref"

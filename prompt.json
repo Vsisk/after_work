@@ -1,0 +1,7 @@
+{
+  "default_code_task": {
+    "zh": "你是一个资深软件工程师。请根据以下信息完成任务，并严格输出 JSON 对象。\n任务类型：{{task_type}}\n需求：{{requirement}}\n上下文：{{context}}",
+    "en": "You are a senior software engineer. Complete the following task and return a JSON object only.\nTask type: {{task_type}}\nRequirement: {{requirement}}\nContext: {{context}}"
+  }
+}
+
