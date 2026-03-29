@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
 from billing_dsl_agent.models import (
@@ -13,6 +12,7 @@ from billing_dsl_agent.models import (
     ValidationIssue,
 )
 from billing_dsl_agent.plan_validator import parse_program_plan_payload
+from billing_dsl_agent.services.prompt_manager import PromptManager
 
 
 class OpenAIClient(Protocol):
@@ -34,14 +34,20 @@ class StubOpenAIClient:
 
 
 class LLMPlanner:
-    def __init__(self, client: OpenAIClient):
+    def __init__(
+        self,
+        client: OpenAIClient,
+        prompt_manager: Optional[PromptManager] = None,
+        prompt_lang: str = "en",
+    ):
         self.client = client
-        self.prompt_dir = Path(__file__).resolve().parent / "prompts"
+        self.prompt_manager = prompt_manager or PromptManager()
+        self.prompt_lang = prompt_lang
 
     def plan(self, user_requirement: str, node_def: NodeDef, env: FilteredEnvironment) -> ProgramPlan:
         payload = {
             "mode": "plan",
-            "prompt": self._load_prompt("plan_prompt.txt"),
+            "prompt": self._load_prompt("dsl_plan_prompt"),
             "user_requirement": user_requirement,
             "node_def": {
                 "node_id": node_def.node_id,
@@ -75,7 +81,7 @@ class LLMPlanner:
     ) -> Optional[ProgramPlan]:
         payload = {
             "mode": "repair",
-            "prompt": self._load_prompt("repair_prompt.txt"),
+            "prompt": self._load_prompt("dsl_repair_prompt"),
             "invalid_plan": invalid_plan.raw_plan or invalid_plan.model_dump(mode="python"),
             "issues": [item.model_dump(mode="python") for item in issues],
             "environment": self._build_env_payload(env),
@@ -93,8 +99,8 @@ class LLMPlanner:
             "selected_function_ids": env.selected_function_ids,
         }
 
-    def _load_prompt(self, name: str) -> str:
-        return (self.prompt_dir / name).read_text(encoding="utf-8").strip()
+    def _load_prompt(self, prompt_key: str) -> str:
+        return self.prompt_manager.get_prompt(prompt_key=prompt_key, lang=self.prompt_lang).strip()
 
     def _parse_plan(self, raw: Dict[str, Any]) -> ProgramPlan:
         try:

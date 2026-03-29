@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Iterable, List
 from typing import Any, Dict, Optional, Protocol
 
 from billing_dsl_agent.models import NodeDef
+from billing_dsl_agent.services.prompt_manager import PromptManager, PromptManagerError
 
 
 @dataclass(slots=True)
@@ -36,7 +36,10 @@ class OpenAISelectorClient(Protocol):
 @dataclass(slots=True)
 class OpenAISemanticSelector(SemanticSelector):
     client: OpenAISelectorClient
-    prompt_path: Path = Path(__file__).resolve().parent / "prompts" / "semantic_selector_prompt.json"
+    prompt_manager: PromptManager = field(default_factory=PromptManager)
+    prompt_lang: str = "zh"
+    system_prompt_key: str = "semantic_selector_system"
+    instruction_prompt_key: str = "semantic_selector_instruction"
     default_top_k: int = 5
 
     def select(
@@ -87,12 +90,12 @@ class OpenAISemanticSelector(SemanticSelector):
 
     def _load_prompt(self) -> Dict[str, str]:
         try:
-            data = json.loads(self.prompt_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            return {
+                "system": self.prompt_manager.get_prompt(self.system_prompt_key, self.prompt_lang),
+                "instruction": self.prompt_manager.get_prompt(self.instruction_prompt_key, self.prompt_lang),
+            }
+        except PromptManagerError:
             return {"system": "", "instruction": ""}
-        if not isinstance(data, dict):
-            return {"system": "", "instruction": ""}
-        return {str(k): str(v) for k, v in data.items()}
 
     def _parse_output(self, raw: Optional[Dict[str, Any]]) -> List[str]:
         if not isinstance(raw, dict):

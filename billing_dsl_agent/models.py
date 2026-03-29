@@ -178,7 +178,7 @@ class QueryCallPlanNode(StrictModel):
     data_source: str | None = None
     naming_sql_id: str | None = None
     filters: List[QueryFilterPlanNode] = Field(default_factory=list)
-    where: "ExprPlanNode" | None = None
+    where: ExprPlanNode | None = None
     pairs: List[QueryPairPlanNode] = Field(default_factory=list)
 
 
