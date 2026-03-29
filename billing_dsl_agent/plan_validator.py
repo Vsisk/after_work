@@ -63,15 +63,56 @@ class PlanValidator:
     def validate(self, plan: ProgramPlan, env: FilteredEnvironment) -> ValidationResult:
         current = plan
         attempts = 0
+        repair_attempts = []
+        llm_errors = []
         while True:
             issues = self._collect_issues(current, env)
-            if not issues:
-                return ValidationResult(is_valid=True, issues=[], repaired_plan=current)
+            blocking_issues = [item for item in issues if item.severity != "warning"]
+            if not blocking_issues:
+                return ValidationResult(
+                    is_valid=True,
+                    issues=issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
             if self.planner is None or attempts >= self.max_retries:
-                return ValidationResult(is_valid=False, issues=issues, repaired_plan=current)
-            repaired = self.planner.repair(current, env, issues)
+                return ValidationResult(
+                    is_valid=False,
+                    issues=blocking_issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
+            repaired = self.planner.repair(current, env, blocking_issues)
+            repair_attempts = list(getattr(self.planner, "repair_attempts", repair_attempts))
+            llm_errors = list(getattr(self.planner, "llm_errors", llm_errors))
             if repaired is None:
-                return ValidationResult(is_valid=False, issues=issues, repaired_plan=current)
+                return ValidationResult(
+                    is_valid=False,
+                    issues=blocking_issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
+            if _plans_equivalent(current, repaired):
+                issues = _dedupe_issues(
+                    [
+                        *blocking_issues,
+                        issue(
+                            "repair_no_progress",
+                            "repair returned an equivalent invalid plan; stop repair loop",
+                            "program",
+                        ),
+                    ]
+                )
+                return ValidationResult(
+                    is_valid=False,
+                    issues=issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
             current = repaired
             attempts += 1
 
@@ -819,8 +860,9 @@ def _resolve_context_id(ref: str, env: FilteredEnvironment, allowed_ids: set[str
     if ref in registry.contexts:
         if allowed_ids is None or ref in allowed_ids:
             return ref
+    aliases = _context_ref_aliases(ref)
     for context_id, context in registry.contexts.items():
-        if context.path == ref and (allowed_ids is None or context_id in allowed_ids):
+        if context.path in aliases and (allowed_ids is None or context_id in allowed_ids):
             return context_id
     return None
 
@@ -969,6 +1011,15 @@ def _suffix_name(value: str) -> str:
     return value.split(":")[-1] if value else value
 
 
+def _context_ref_aliases(ref: str) -> set[str]:
+    aliases = {ref}
+    if ref.startswith("$ctx$.root."):
+        aliases.add("$ctx$." + ref[len("$ctx$.root.") :])
+    elif ref.startswith("$ctx$."):
+        aliases.add("$ctx$.root." + ref[len("$ctx$.") :])
+    return aliases
+
+
 def _dedupe_issues(issues: list[ValidationIssue]) -> list[ValidationIssue]:
     seen: set[tuple[str, str, str, str]] = set()
     deduped: list[ValidationIssue] = []
@@ -979,6 +1030,10 @@ def _dedupe_issues(issues: list[ValidationIssue]) -> list[ValidationIssue]:
         seen.add(key)
         deduped.append(current)
     return deduped
+
+
+def _plans_equivalent(left: ProgramPlan, right: ProgramPlan) -> bool:
+    return left.model_dump(mode="python", exclude={"raw_plan"}) == right.model_dump(mode="python", exclude={"raw_plan"})
 
 
 def parse_program_plan_payload(raw: dict[str, Any]) -> ProgramPlan:

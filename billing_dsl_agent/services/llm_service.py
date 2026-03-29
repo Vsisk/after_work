@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from billing_dsl_agent.services.llm_client import OpenAILLMClient
+from billing_dsl_agent.services.llm_client import OpenAILLMClient, RawLLMInvocation
 
 
 @dataclass(slots=True)
@@ -26,3 +26,18 @@ class PromptDrivenLLMService:
             **kwargs,
         )
 
+    def generate_raw(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        response_format: Mapping[str, Any] | str | None = None,
+        **kwargs: Any,
+    ) -> RawLLMInvocation:
+        return self.client.invoke_raw(
+            prompt_key=prompt_key,
+            lang=lang,
+            prompt_params=prompt_params,
+            response_format=response_format,
+            **kwargs,
+        )

@@ -68,7 +68,7 @@ class ResourceNormalizer:
     ) -> None:
         for node in sorted(normalized_nodes.values(), key=lambda item: (item.depth, item.access_path)):
             path = node.access_path
-            if not path or not node.is_leaf:
+            if not path or not node.is_leaf or node.depth == 0:
                 continue
             resource_id = f"context:{path}"
             domain = path.split(".")[1] if "." in path else "default"

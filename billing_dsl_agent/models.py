@@ -96,6 +96,11 @@ class FilteredEnvironment:
     selected_local_context_ids: List[str] = field(default_factory=list)
     selected_bo_ids: List[str] = field(default_factory=list)
     selected_function_ids: List[str] = field(default_factory=list)
+    selected_global_contexts: List[ContextResource] = field(default_factory=list)
+    selected_local_contexts: List[ContextResource] = field(default_factory=list)
+    selected_bos: List[BOResource] = field(default_factory=list)
+    selected_functions: List[FunctionResource] = field(default_factory=list)
+    selection_debug: "EnvironmentSelectionBundle | None" = None
 
 
 @dataclass(slots=True)
@@ -130,6 +135,51 @@ class ValidationIssue(StrictModel):
     message: str
     path: str = ""
     severity: str = "error"
+
+
+class LLMErrorRecord(StrictModel):
+    stage: str
+    code: str
+    message: str
+    raw_text: str = ""
+    raw_payload: Dict[str, Any] | None = None
+    exception_type: str = ""
+
+
+class LLMAttemptRecord(StrictModel):
+    stage: str
+    attempt_index: int
+    request_payload: Dict[str, Any] | None = None
+    response_payload: Dict[str, Any] | None = None
+    parsed_ok: bool = False
+    errors: List[LLMErrorRecord] = Field(default_factory=list)
+
+
+class ResourceSelectionOutput(StrictModel):
+    resource_id_list: List[str] = Field(default_factory=list)
+
+
+class ResourceSelectionDebug(StrictModel):
+    resource_type: str
+    strategy: str
+    candidate_ids: List[str] = Field(default_factory=list)
+    selected_ids: List[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    llm_errors: List[LLMErrorRecord] = Field(default_factory=list)
+
+
+class EnvironmentSelectionBundle(StrictModel):
+    global_context: ResourceSelectionDebug
+    local_context: ResourceSelectionDebug
+    bo: ResourceSelectionDebug
+    function: ResourceSelectionDebug
+
+
+class GenerateDSLDebug(StrictModel):
+    resource_selection: EnvironmentSelectionBundle | None = None
+    plan_attempts: List[LLMAttemptRecord] = Field(default_factory=list)
+    repair_attempts: List[LLMAttemptRecord] = Field(default_factory=list)
+    llm_errors: List[LLMErrorRecord] = Field(default_factory=list)
 
 
 class LiteralPlanNode(StrictModel):
@@ -327,6 +377,8 @@ class ValidationResult(StrictModel):
     is_valid: bool
     issues: List[ValidationIssue] = Field(default_factory=list)
     repaired_plan: ProgramPlan | None = None
+    repair_attempts: List[LLMAttemptRecord] = Field(default_factory=list)
+    llm_errors: List[LLMErrorRecord] = Field(default_factory=list)
 
 
 class GenerateDSLRequest(StrictModel):
@@ -343,6 +395,7 @@ class GenerateDSLResponse(StrictModel):
     ast: ProgramNode | None = None
     validation: ValidationResult | None = None
     failure_reason: str = ""
+    debug: GenerateDSLDebug | None = None
 
 
 QueryFilterPlanNode.model_rebuild()

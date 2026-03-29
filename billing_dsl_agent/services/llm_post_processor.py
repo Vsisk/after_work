@@ -25,7 +25,7 @@ def _extract_text_from_content(content: Any) -> str:
     return ""
 
 
-def _extract_response_text(response_payload: Mapping[str, Any]) -> str:
+def extract_response_text(response_payload: Mapping[str, Any]) -> str:
     choices = response_payload.get("choices")
     if isinstance(choices, list) and choices:
         first_choice = choices[0]
@@ -69,7 +69,7 @@ def _normalize_to_dict(parsed: Any) -> dict[str, Any]:
 
 
 def post_process_response(response_payload: Mapping[str, Any]) -> dict[str, Any]:
-    text = _extract_response_text(response_payload)
+    text = extract_response_text(response_payload)
     if not text:
         return {}
 
@@ -79,4 +79,3 @@ def post_process_response(response_payload: Mapping[str, Any]) -> dict[str, Any]
         return {"result": text}
 
     return _normalize_to_dict(parsed)
-

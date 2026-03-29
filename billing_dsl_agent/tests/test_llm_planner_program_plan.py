@@ -1,5 +1,5 @@
 from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
-from billing_dsl_agent.models import FilteredEnvironment, NodeDef, ResourceRegistry, ValidationIssue
+from billing_dsl_agent.models import BOResource, ContextResource, FilteredEnvironment, FunctionResource, NodeDef, ResourceRegistry, ValidationIssue
 
 
 def _env() -> FilteredEnvironment:
@@ -9,6 +9,28 @@ def _env() -> FilteredEnvironment:
         selected_local_context_ids=["local:$local$.invoiceId"],
         selected_bo_ids=["bo:CustomerBO"],
         selected_function_ids=["function:Customer.GetSalutation"],
+        selected_global_contexts=[
+            ContextResource(
+                resource_id="context:$ctx$.customer.gender",
+                name="gender",
+                path="$ctx$.customer.gender",
+            )
+        ],
+        selected_bos=[
+            BOResource(
+                resource_id="bo:CustomerBO",
+                bo_name="CustomerBO",
+                field_ids=["bo:CustomerBO:field:gender"],
+            )
+        ],
+        selected_functions=[
+            FunctionResource(
+                resource_id="function:Customer.GetSalutation",
+                function_id="Customer.GetSalutation",
+                name="GetSalutation",
+                full_name="Customer.GetSalutation",
+            )
+        ],
     )
 
 
@@ -17,23 +39,25 @@ def _node() -> NodeDef:
 
 
 def test_llm_planner_returns_program_plan() -> None:
-    planner = LLMPlanner(
-        StubOpenAIClient(
-            plan_response={
-                "definitions": [
-                    {
-                        "kind": "variable",
-                        "name": "customer_gender",
-                        "expr": {"type": "context_ref", "path": "$ctx$.customer.gender"},
-                    }
-                ],
-                "return_expr": {"type": "var_ref", "name": "customer_gender"},
-            }
-        )
+    client = StubOpenAIClient(
+        plan_response={
+            "definitions": [
+                {
+                    "kind": "variable",
+                    "name": "customer_gender",
+                    "expr": {"type": "context_ref", "path": "$ctx$.customer.gender"},
+                }
+            ],
+            "return_expr": {"type": "var_ref", "name": "customer_gender"},
+        }
     )
+    planner = LLMPlanner(client)
     plan = planner.plan("generate title", _node(), _env())
     assert plan.definitions[0].name == "customer_gender"
     assert plan.return_expr.type == "var_ref"
+    assert client.last_payload is not None
+    assert client.last_payload["environment"]["selected_function_ids"] == ["function:Customer.GetSalutation"]
+    assert client.last_payload["environment"]["selected_functions"][0]["resource_id"] == "function:Customer.GetSalutation"
 
 
 def test_llm_planner_adapts_legacy_payload() -> None:

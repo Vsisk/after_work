@@ -42,6 +42,13 @@ class LLMClientError(RuntimeError):
 Transport = Callable[[str, dict[str, Any], dict[str, str], float], dict[str, Any]]
 
 
+@dataclass(slots=True)
+class RawLLMInvocation:
+    request_url: str
+    request_payload: dict[str, Any]
+    response_payload: dict[str, Any]
+
+
 def _load_env_file(env_path: Path) -> dict[str, str]:
     if not env_path.exists():
         return {}
@@ -129,15 +136,37 @@ class OpenAILLMClient:
         response_format: Mapping[str, Any] | str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        raw_invocation = self.invoke_raw(
+            prompt_key=prompt_key,
+            lang=lang,
+            prompt_params=prompt_params,
+            response_format=response_format,
+            **kwargs,
+        )
+        return post_process_response(raw_invocation.response_payload)
+
+    def invoke_raw(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        response_format: Mapping[str, Any] | str | None = None,
+        **kwargs: Any,
+    ) -> RawLLMInvocation:
         prompt = self.prompt_manager.render_prompt(prompt_key, lang, prompt_params)
         payload = self._build_payload(prompt=prompt, response_format=response_format, extra_params=kwargs)
+        request_url = self._resolve_request_url()
         raw_response = self.transport(
-            self._resolve_request_url(),
+            request_url,
             payload,
             self._build_headers(),
             self._resolve_timeout(),
         )
-        return post_process_response(raw_response)
+        return RawLLMInvocation(
+            request_url=request_url,
+            request_payload=payload,
+            response_payload=raw_response,
+        )
 
     def _build_payload(
         self,
@@ -186,4 +215,3 @@ class OpenAILLMClient:
 
     def _load_env(self) -> dict[str, str]:
         return _load_env_file(self.env_path)
-

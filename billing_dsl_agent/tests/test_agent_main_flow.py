@@ -187,6 +187,8 @@ def test_loader_normalization_and_filtering_pipeline() -> None:
     assert fn.param_defs[0].normalized_param_type == "unknown"
     assert filtered.registry.functions["function:String.Now"].param_defs == []
     assert "function:Customer.GetSalutation" in filtered.registry.functions
+    assert filtered.selection_debug is not None
+    assert filtered.selection_debug.global_context.selected_ids
 
 
 def test_local_context_inherits_from_edsl_ancestors() -> None:
@@ -237,6 +239,9 @@ def test_planner_only_sees_filtered_ids() -> None:
     assert payload is not None
     assert "selected_function_ids" in payload["environment"]
     assert "function:Customer.GetSalutation" in payload["environment"]["selected_function_ids"]
+    assert response.debug is not None
+    assert response.debug.resource_selection is not None
+    assert "function:Customer.GetSalutation" in response.debug.resource_selection.function.selected_ids
 
 
 def test_generate_dsl_renders_program_defs_and_final_expression() -> None:
@@ -309,6 +314,9 @@ def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
     assert response.failure_reason == "plan validation failed"
     assert response.validation is not None
     assert any(item.code == "undefined_var_ref" for item in response.validation.issues)
+    assert any(item.code == "repair_no_progress" for item in response.validation.issues)
+    assert response.debug is not None
+    assert len(response.debug.repair_attempts) == 1
 
 
 def test_select_one_supports_where_boolean_ast_render() -> None:

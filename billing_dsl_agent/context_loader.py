@@ -139,7 +139,10 @@ def _normalize_context_property(
     return_type = node_payload.get("return_type") if isinstance(node_payload.get("return_type"), dict) else {}
     return_data_type = _as_text(return_type.get("data_type"))
     return_data_type_name = _as_text(return_type.get("data_type_name"))
-    expandable = is_expandable_context_type(return_data_type)
+    raw_children = node_payload.get("children")
+    if not isinstance(raw_children, list):
+        raw_children = node_payload.get("sub_properties")
+    expandable = is_expandable_context_type(return_data_type) or (isinstance(raw_children, list) and bool(raw_children))
 
     resource_id = _build_resource_id(context_kind, access_path, property_id)
     node = NormalizedContextNode(
@@ -169,9 +172,6 @@ def _normalize_context_property(
         return None, ""
 
     if expandable:
-        raw_children = node_payload.get("children")
-        if not isinstance(raw_children, list):
-            raw_children = node_payload.get("sub_properties")
         if isinstance(raw_children, list):
             for child_payload in raw_children:
                 child_property, child_resource_id = _normalize_context_property(
