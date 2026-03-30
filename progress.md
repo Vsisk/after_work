@@ -11,3 +11,4 @@
 - 2026-03-30 需求执行记录：针对 StructuredLLMExecutor 与 OpenAILLMClient 功能重叠问题完成首轮收敛：OpenAILLMClient 新增 `generate/generate_raw` 别名接口，StructuredLLMExecutor 增加 `invoke_raw` 协议兼容，补充对应单测并验证通过。
 - 2026-03-30 需求执行记录：按“仅保留 OpenAILLMClient”决策完成单类收敛：将结构化执行能力迁移至 OpenAILLMClient，LLMPlanner/语义选择器改为直接依赖 client，删除 StructuredLLMExecutor 与 PromptDrivenLLMService，并同步迁移测试。
 - 2026-03-30 需求执行记录：完成 OpenAI 同 provider 多模型+VL 能力扩展：抽象 BaseOpenAILLMClient 与 LLMConfig，支持 `LLM_<NAME>_<FIELD>` / `LLM_DEFAULT_NAME` 配置路由，OpenAILLMClient 新增 `llm_name` 覆盖与多模态（image_url+本地路径）调用。
+- 2026-03-30 需求执行记录：完成 BO namingSQL 参数签名增强（loader 保留 namingSQL/param raw payload，normalizer 新增 NormalizedNamingSQLDef/Param/TypeRef 并写入 BOResource 索引，ResourceManager BO candidates 输出 namingSQL 参数类型签名，PlanValidator 增加 namingSQL 唯一解析/参数个数与签名存在性校验及 compare_namingsql_param_type 顺序比较逻辑）；同步补充 bo_loader/resource_manager/program_plan_validator 单测。

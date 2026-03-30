@@ -18,7 +18,26 @@ def _sample_bos() -> list[dict]:
             "bo_name": "BB_PREP_SUB",
             "description": "预处理子表",
             "fields": ["prepareId", "billCycleId", "regionId"],
-            "naming_sqls": ["QUERY_BY_PREPARE_AND_CYCLE"],
+            "naming_sqls": [
+                {
+                    "naming_sql_id": "query_by_prepare_and_cycle_001",
+                    "naming_sql_name": "QUERY_BY_PREPARE_AND_CYCLE",
+                    "params": [
+                        {
+                            "param_name": "prepareId",
+                            "data_type": "basic",
+                            "data_type_name": "INT64",
+                            "is_list": False,
+                        },
+                        {
+                            "param_name": "billCycleId",
+                            "data_type": "basic",
+                            "data_type_name": "INT64",
+                            "is_list": False,
+                        },
+                    ],
+                }
+            ],
         }
     ]
 
@@ -99,7 +118,9 @@ def test_select_candidates_by_query_keywords() -> None:
 
     matched_bo = next(item for item in candidates.bo_candidates if item.bo_name == "BB_PREP_SUB")
     assert "regionId" in matched_bo.fields
-    assert "QUERY_BY_PREPARE_AND_CYCLE" in matched_bo.naming_sqls
+    assert matched_bo.naming_sqls[0]["naming_sql_name"] == "QUERY_BY_PREPARE_AND_CYCLE"
+    assert matched_bo.naming_sqls[0]["params"][0]["data_type"] == "basic"
+    assert matched_bo.naming_sqls[0]["params"][0]["data_type_name"] == "INT64"
 
 
 def test_select_candidates_apply_budget() -> None:
@@ -141,6 +162,7 @@ def test_format_for_prompt() -> None:
     assert payload["function_candidates"]
     assert {"path", "name", "description"}.issubset(payload["context_candidates"][0].keys())
     assert {"bo_name", "description", "fields", "naming_sqls"}.issubset(payload["bo_candidates"][0].keys())
+    assert {"naming_sql_id", "naming_sql_name", "params"}.issubset(payload["bo_candidates"][0]["naming_sqls"][0].keys())
     assert {"function_id", "function_name", "description", "normalized_return_type", "params"}.issubset(
         payload["function_candidates"][0].keys()
     )

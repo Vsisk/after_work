@@ -127,6 +127,13 @@ def test_normalize_naming_sqls() -> None:
     assert sql_def.name == "getUserById"
     assert sql_def.metadata["or_mapping_id"] == "user_db_mapping_001"
     assert sql_def.metadata["or_mapping_data_source"] == "main_database"
+    assert sql_def.raw_payload["naming_sql_id"] == "get_user_by_id_001"
+    assert len(sql_def.params) == 1
+    assert sql_def.params[0].name == "userId"
+    assert sql_def.params[0].type_ref.data_type == "basic"
+    assert sql_def.params[0].type_ref.data_type_name == "int"
+    assert sql_def.params[0].type_ref.is_list is False
+    assert sql_def.params[0].raw_payload["param_name"] == "userId"
 
 
 def test_normalize_rw_rules() -> None:

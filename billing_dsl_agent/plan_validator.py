@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -37,6 +38,13 @@ from billing_dsl_agent.resource_manager import normalize_function_type
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RESERVED_WORDS = {"def", "return", "if", "else", "and", "or", "not"}
+
+
+@dataclass(slots=True)
+class NamingSQLParamTypeMatchResult:
+    matched: bool
+    mismatch_stage: str = ""
+    reason: str = ""
 
 
 class PlanRepairer(Protocol):
@@ -330,8 +338,8 @@ def _validate_expr_semantics(
                 if expr.where is not None:
                     issues.extend(_validate_where_expr(expr.where, bo, env, f"{path}.where"))
         elif expr.query_kind in {"fetch", "fetch_one"}:
-            resolved = _resolve_naming_sql(expr, env)
-            if resolved is None:
+            resolved_matches = _resolve_naming_sql_matches(expr, env)
+            if not resolved_matches:
                 issues.append(
                     issue(
                         "unknown_naming_sql",
@@ -339,8 +347,16 @@ def _validate_expr_semantics(
                         f"{path}.naming_sql_id",
                     )
                 )
+            elif len(resolved_matches) > 1:
+                issues.append(
+                    issue(
+                        "ambiguous_naming_sql",
+                        f"ambiguous naming sql for query: {expr.naming_sql_id or expr.source_name}",
+                        f"{path}.naming_sql_id",
+                    )
+                )
             else:
-                resolved_bo_id, resolved_bo, naming_sql_name, param_names = resolved
+                resolved_bo_id, resolved_bo, naming_sql = resolved_matches[0]
                 if resolved_bo_id not in filtered_bos:
                     issues.append(issue("bo_not_in_filtered_environment", f"bo not in filtered environment: {resolved_bo_id}", path))
                 if expr.data_source and resolved_bo.data_source and expr.data_source != resolved_bo.data_source:
@@ -350,15 +366,83 @@ def _validate_expr_semantics(
                 actual_keys = [pair.key for pair in expr.pairs if str(pair.key or "").strip()]
                 if not actual_keys and expr.filters:
                     actual_keys = [flt.field for flt in expr.filters if str(flt.field or "").strip()]
-                expected = [name for name in param_names if name]
+                expected_params = list(getattr(naming_sql, "params", []) or [])
+                expected = [str(getattr(item, "param_name", "") or "").strip() for item in expected_params if str(getattr(item, "param_name", "") or "").strip()]
                 if set(expected) != set(actual_keys) or len(expected) != len(actual_keys):
                     issues.append(
                         issue(
                             "naming_sql_param_mismatch",
-                            f"naming sql params mismatch for {naming_sql_name}: expected={expected}, actual={actual_keys}",
+                            f"naming sql params mismatch for {getattr(naming_sql, 'naming_sql_name', '')}: expected={expected}, actual={actual_keys}",
                             f"{path}.pairs",
                         )
                     )
+                expected_map = {str(getattr(param, "param_name", "") or ""): param for param in expected_params}
+                actual_pairs_by_name = {str(pair.key or ""): pair for pair in expr.pairs if str(pair.key or "").strip()}
+                for expected_name, expected_param in expected_map.items():
+                    expected_ref = getattr(expected_param, "normalized_type_ref", None)
+                    if expected_ref is None:
+                        issues.append(
+                            issue(
+                                "naming_sql_param_signature_missing",
+                                f"naming sql param signature missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
+                                f"{path}.pairs",
+                                severity="warning",
+                            )
+                        )
+                        continue
+                    if not getattr(expected_ref, "data_type", ""):
+                        issues.append(
+                            issue(
+                                "naming_sql_param_data_type_missing",
+                                f"naming sql expected data_type missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
+                                f"{path}.pairs",
+                                severity="warning",
+                            )
+                        )
+                    if not getattr(expected_ref, "data_type_name", ""):
+                        issues.append(
+                            issue(
+                                "naming_sql_param_data_type_name_missing",
+                                f"naming sql expected data_type_name missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
+                                f"{path}.pairs",
+                                severity="warning",
+                            )
+                        )
+                    if getattr(expected_ref, "is_list", None) is None:
+                        issues.append(
+                            issue(
+                                "naming_sql_param_is_list_missing",
+                                f"naming sql expected is_list missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
+                                f"{path}.pairs",
+                                severity="warning",
+                            )
+                        )
+                    actual_pair = actual_pairs_by_name.get(expected_name)
+                    if actual_pair is None:
+                        continue
+                    actual_type = _infer_naming_sql_expr_type(actual_pair.value, env)
+                    if getattr(actual_type, "is_unknown", True):
+                        issues.append(
+                            issue(
+                                "naming_sql_param_actual_type_unresolved",
+                                f"naming sql actual type unresolved for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
+                                f"{path}.pairs",
+                                severity="warning",
+                            )
+                        )
+                        continue
+                    match_result = compare_namingsql_param_type(expected_ref, actual_type)
+                    if not match_result.matched:
+                        issues.append(
+                            issue(
+                                "naming_sql_param_type_mismatch",
+                                (
+                                    f"naming sql param type mismatch for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}: "
+                                    f"{match_result.reason}"
+                                ),
+                                f"{path}.pairs",
+                            )
+                        )
         else:
             issues.append(issue("invalid_query_shape", f"unsupported query kind: {expr.query_kind}", f"{path}.query_kind"))
         for filter_index, query_filter in enumerate(expr.filters):
@@ -929,37 +1013,132 @@ def _bo_has_naming_sql(bo: Any, naming_sql: str) -> bool:
     return any(sql_id == naming_sql or _suffix_name(sql_id) == naming_sql for sql_id in bo.naming_sql_ids)
 
 
-def _resolve_naming_sql(expr: QueryCallPlanNode, env: FilteredEnvironment) -> tuple[str, Any, str, list[str]] | None:
+def _resolve_naming_sql_matches(expr: QueryCallPlanNode, env: FilteredEnvironment) -> list[tuple[str, Any, Any]]:
+    matches: list[tuple[str, Any, Any]] = []
     if expr.bo_id and expr.bo_id in env.registry.bos:
         bo = env.registry.bos[expr.bo_id]
         result = _resolve_naming_sql_for_bo(bo, expr)
         if result is not None:
-            return expr.bo_id, bo, result[0], result[1]
+            matches.append((expr.bo_id, bo, result))
+        return matches
 
     bo_id, bo = _resolve_bo(expr, env)
     if bo is not None and bo_id is not None:
         result = _resolve_naming_sql_for_bo(bo, expr)
         if result is not None:
-            return bo_id, bo, result[0], result[1]
+            matches.append((bo_id, bo, result))
+        return matches
 
     for each_bo_id, each_bo in env.registry.bos.items():
         result = _resolve_naming_sql_for_bo(each_bo, expr)
         if result is not None:
-            return each_bo_id, each_bo, result[0], result[1]
-    return None
+            matches.append((each_bo_id, each_bo, result))
+    return matches
 
 
-def _resolve_naming_sql_for_bo(bo: Any, expr: QueryCallPlanNode) -> tuple[str, list[str]] | None:
+def _resolve_naming_sql_for_bo(bo: Any, expr: QueryCallPlanNode) -> Any | None:
     candidate_keys = [str(expr.naming_sql_id or "").strip(), str(expr.source_name or "").strip()]
     for key in candidate_keys:
         if not key:
             continue
+        naming_sql_id = bo.naming_sql_name_by_key.get(key)
+        if isinstance(getattr(bo, "naming_sqls_by_id", None), dict):
+            sql_def = bo.naming_sqls_by_id.get(key)
+            if sql_def is not None:
+                return sql_def
+            if naming_sql_id and naming_sql_id in bo.naming_sqls_by_id:
+                return bo.naming_sqls_by_id[naming_sql_id]
+            for each_def in getattr(bo, "naming_sqls", []) or []:
+                if getattr(each_def, "naming_sql_name", "") == key:
+                    return each_def
         naming_sql_name = bo.naming_sql_name_by_key.get(key)
-        if not naming_sql_name:
-            continue
-        param_names = bo.naming_sql_param_names_by_key.get(key) or bo.naming_sql_param_names_by_key.get(naming_sql_name) or []
-        return naming_sql_name, list(param_names)
+        if naming_sql_name:
+            param_names = bo.naming_sql_param_names_by_key.get(key) or bo.naming_sql_param_names_by_key.get(naming_sql_name) or []
+            return _legacy_naming_sql_def(naming_sql_name, param_names)
     return None
+
+
+def _legacy_naming_sql_def(naming_sql_name: str, param_names: list[str]) -> Any:
+    class _LegacyNamingSQL:
+        def __init__(self, sql_name: str, param_names_: list[str]):
+            self.naming_sql_id = sql_name
+            self.naming_sql_name = sql_name
+            self.params = [
+                _LegacyParam(name=param_name)
+                for param_name in param_names_
+            ]
+
+    class _LegacyParam:
+        def __init__(self, name: str):
+            self.param_name = name
+            self.normalized_type_ref = None
+
+    return _LegacyNamingSQL(naming_sql_name, list(param_names))
+
+
+def _infer_naming_sql_expr_type(expr: ExprPlanNode, env: FilteredEnvironment) -> Any:
+    inferred = _infer_expr_type(expr, env)
+    normalized = str(getattr(inferred, "normalized_type", "") or "").lower()
+    if normalized == "unknown":
+        return _naming_type_ref("", "", None, is_unknown=True)
+    if normalized.startswith("list["):
+        item_type = normalized[len("list[") : -1]
+        data_type_name = _map_basic_data_type_name(item_type)
+        return _naming_type_ref("basic", data_type_name, True, is_unknown=not bool(data_type_name))
+    data_type_name = _map_basic_data_type_name(normalized)
+    return _naming_type_ref("basic", data_type_name, False, is_unknown=not bool(data_type_name))
+
+
+def _map_basic_data_type_name(normalized_type: str) -> str:
+    mapping = {
+        "string": "String",
+        "int": "INT64",
+        "double": "Double",
+        "boolean": "Boolean",
+    }
+    return mapping.get(str(normalized_type or "").lower(), "")
+
+
+def _naming_type_ref(data_type: str, data_type_name: str, is_list: bool | None, is_unknown: bool) -> Any:
+    class _TypeRef:
+        def __init__(self):
+            self.data_type = data_type
+            self.data_type_name = data_type_name
+            self.is_list = is_list
+            self.is_unknown = is_unknown
+
+    return _TypeRef()
+
+
+def compare_namingsql_param_type(expected: Any, actual: Any) -> NamingSQLParamTypeMatchResult:
+    expected_data_type = str(getattr(expected, "data_type", "") or "")
+    actual_data_type = str(getattr(actual, "data_type", "") or "")
+    if expected_data_type != actual_data_type:
+        return NamingSQLParamTypeMatchResult(
+            matched=False,
+            mismatch_stage="data_type",
+            reason=f"data_type mismatch expected={expected_data_type} actual={actual_data_type}",
+        )
+
+    expected_data_type_name = str(getattr(expected, "data_type_name", "") or "")
+    actual_data_type_name = str(getattr(actual, "data_type_name", "") or "")
+    if expected_data_type_name != actual_data_type_name:
+        return NamingSQLParamTypeMatchResult(
+            matched=False,
+            mismatch_stage="data_type_name",
+            reason=f"data_type_name mismatch expected={expected_data_type_name} actual={actual_data_type_name}",
+        )
+
+    expected_is_list = getattr(expected, "is_list", None)
+    actual_is_list = getattr(actual, "is_list", None)
+    if expected_is_list != actual_is_list:
+        return NamingSQLParamTypeMatchResult(
+            matched=False,
+            mismatch_stage="is_list",
+            reason=f"is_list mismatch expected={expected_is_list} actual={actual_is_list}",
+        )
+
+    return NamingSQLParamTypeMatchResult(matched=True)
 
 
 def _validate_where_expr(expr: ExprPlanNode, bo: Any, env: FilteredEnvironment, path: str) -> list[ValidationIssue]:

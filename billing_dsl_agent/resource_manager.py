@@ -65,7 +65,7 @@ class ResourceManager:
             bo_by_name[self._norm(bo_name)] = bo
             for field_name in self._bo_fields(bo):
                 bo_field_index[self._norm(field_name)][self._norm(bo_name)] = bo
-            for sql_name in self._bo_naming_sqls(bo):
+            for sql_name in self._bo_naming_sql_names(bo):
                 naming_sql_by_name[self._norm(sql_name)] = bo
 
         for fn in self._iter_items(function_registry_or_list, ("functions", "func", "native_func", "items")):
@@ -287,8 +287,9 @@ class ResourceManager:
             bo_name = self._first_text(bo, "bo_name", "name", "id")
             description = self._first_text(bo, "description", "desc")
             fields = self._bo_fields(bo)
-            naming_sqls = self._bo_naming_sqls(bo)
-            score = self._match_score(terms, [bo_name, description, " ".join(fields), " ".join(naming_sqls)])
+            naming_sqls = self._bo_naming_sql_defs(bo)
+            naming_sql_names = [str(item.get("naming_sql_name") or "") for item in naming_sqls]
+            score = self._match_score(terms, [bo_name, description, " ".join(fields), " ".join(naming_sql_names)])
             if score <= 0:
                 continue
             candidate = scores.get(norm_name)
@@ -503,17 +504,45 @@ class ResourceManager:
             return [value for value in values if value]
         return []
 
-    def _bo_naming_sqls(self, bo: Any) -> List[str]:
+    def _bo_naming_sql_names(self, bo: Any) -> List[str]:
+        return [str(item.get("naming_sql_name") or "") for item in self._bo_naming_sql_defs(bo) if item.get("naming_sql_name")]
+
+    def _bo_naming_sql_defs(self, bo: Any) -> List[Dict[str, Any]]:
         raw = self._first_non_none(bo, "naming_sqls", "naming_sql", "namingSqls", "queries")
-        if isinstance(raw, list):
-            values: List[str] = []
-            for item in raw:
-                if isinstance(item, str):
-                    values.append(item)
-                else:
-                    values.append(self._first_text(item, "name", "sql_name", "id"))
-            return [value for value in values if value]
-        return []
+        if not isinstance(raw, list):
+            return []
+        values: List[Dict[str, Any]] = []
+        for item in raw:
+            if isinstance(item, str):
+                values.append({"naming_sql_id": item, "naming_sql_name": item, "params": []})
+                continue
+            params = self._bo_naming_sql_params(item)
+            values.append(
+                {
+                    "naming_sql_id": self._first_text(item, "naming_sql_id", "id", "resource_id", "name", "sql_name"),
+                    "naming_sql_name": self._first_text(item, "naming_sql_name", "name", "sql_name", "id"),
+                    "params": params,
+                }
+            )
+        return [value for value in values if value.get("naming_sql_name")]
+
+    def _bo_naming_sql_params(self, naming_sql: Any) -> List[Dict[str, Any]]:
+        raw = self._first_non_none(naming_sql, "params", "param_list", "parameters")
+        if not isinstance(raw, list):
+            return []
+        values: List[Dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            values.append(
+                {
+                    "param_name": self._first_text(item, "param_name", "name", "id"),
+                    "data_type": self._first_text(item, "data_type"),
+                    "data_type_name": self._first_text(item, "data_type_name"),
+                    "is_list": self._first_non_none(item, "is_list"),
+                }
+            )
+        return [value for value in values if value.get("param_name")]
 
     def _function_full_name(self, fn: Any) -> str:
         full_name = self._first_text(fn, "full_name", "name")

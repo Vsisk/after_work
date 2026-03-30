@@ -3,13 +3,20 @@ from billing_dsl_agent.models import (
     ContextResource,
     FilteredEnvironment,
     FunctionResource,
+    NormalizedNamingSQLDef,
+    NormalizedNamingSQLParam,
+    NormalizedNamingTypeRef,
     NormalizedLocalContextNode,
     ProgramPlan,
     ProgramPlanLimits,
     ResourceRegistry,
     VisibleLocalContextSet,
 )
-from billing_dsl_agent.plan_validator import PlanValidator, validate_program_plan_structure
+from billing_dsl_agent.plan_validator import (
+    PlanValidator,
+    compare_namingsql_param_type,
+    validate_program_plan_structure,
+)
 
 
 def _env() -> FilteredEnvironment:
@@ -39,6 +46,54 @@ def _env() -> FilteredEnvironment:
                 ],
                 data_source="crm",
                 naming_sql_ids=["bo:CustomerBO:sql:findById"],
+                naming_sqls=[
+                    NormalizedNamingSQLDef(
+                        naming_sql_id="bo:CustomerBO:sql:findById",
+                        naming_sql_name="findById",
+                        bo_id="bo:CustomerBO",
+                        params=[
+                            NormalizedNamingSQLParam(
+                                param_id="findById:0",
+                                param_name="id",
+                                data_type="basic",
+                                data_type_name="INT64",
+                                is_list=False,
+                                normalized_type_ref=NormalizedNamingTypeRef(
+                                    data_type="basic",
+                                    data_type_name="INT64",
+                                    is_list=False,
+                                    is_unknown=False,
+                                ),
+                            )
+                        ],
+                    )
+                ],
+                naming_sqls_by_id={
+                    "bo:CustomerBO:sql:findById": NormalizedNamingSQLDef(
+                        naming_sql_id="bo:CustomerBO:sql:findById",
+                        naming_sql_name="findById",
+                        bo_id="bo:CustomerBO",
+                        params=[
+                            NormalizedNamingSQLParam(
+                                param_id="findById:0",
+                                param_name="id",
+                                data_type="basic",
+                                data_type_name="INT64",
+                                is_list=False,
+                                normalized_type_ref=NormalizedNamingTypeRef(
+                                    data_type="basic",
+                                    data_type_name="INT64",
+                                    is_list=False,
+                                    is_unknown=False,
+                                ),
+                            )
+                        ],
+                    )
+                },
+                naming_sql_name_by_key={
+                    "bo:CustomerBO:sql:findById": "findById",
+                    "findById": "findById",
+                },
             )
         },
         functions={
@@ -284,3 +339,105 @@ def test_method_definition_is_reported_as_unsupported() -> None:
     )
     issues = PlanValidator(planner=None).validate(plan, _env()).issues
     assert any(item.code == "unsupported_definition_kind" for item in issues)
+
+
+def test_compare_namingsql_param_type_ordered_match() -> None:
+    expected = NormalizedNamingTypeRef(data_type="basic", data_type_name="Date", is_list=False, is_unknown=False)
+    actual = NormalizedNamingTypeRef(data_type="basic", data_type_name="Date", is_list=False, is_unknown=False)
+    result = compare_namingsql_param_type(expected, actual)
+    assert result.matched is True
+
+
+def test_compare_namingsql_param_type_data_type_mismatch() -> None:
+    expected = NormalizedNamingTypeRef(data_type="bo", data_type_name="BB_BILL_INVOICE", is_list=False, is_unknown=False)
+    actual = NormalizedNamingTypeRef(data_type="logic", data_type_name="BB_BILL_INVOICE", is_list=False, is_unknown=False)
+    result = compare_namingsql_param_type(expected, actual)
+    assert result.matched is False
+    assert result.mismatch_stage == "data_type"
+
+
+def test_compare_namingsql_param_type_data_type_name_mismatch() -> None:
+    expected = NormalizedNamingTypeRef(data_type="basic", data_type_name="Date", is_list=False, is_unknown=False)
+    actual = NormalizedNamingTypeRef(data_type="basic", data_type_name="String", is_list=False, is_unknown=False)
+    result = compare_namingsql_param_type(expected, actual)
+    assert result.matched is False
+    assert result.mismatch_stage == "data_type_name"
+
+
+def test_compare_namingsql_param_type_is_list_mismatch() -> None:
+    expected = NormalizedNamingTypeRef(data_type="basic", data_type_name="Date", is_list=False, is_unknown=False)
+    actual = NormalizedNamingTypeRef(data_type="basic", data_type_name="Date", is_list=True, is_unknown=False)
+    result = compare_namingsql_param_type(expected, actual)
+    assert result.matched is False
+    assert result.mismatch_stage == "is_list"
+
+
+def test_fetch_namingsql_param_count_and_signature_checks() -> None:
+    plan = _plan(
+        {
+            "definitions": [],
+            "return_expr": {
+                "type": "query_call",
+                "query_kind": "fetch_one",
+                "bo_id": "bo:CustomerBO",
+                "source_name": "findById",
+                "naming_sql_id": "bo:CustomerBO:sql:findById",
+                "pairs": [{"key": "id", "value": {"type": "literal", "value": 1001}}],
+            },
+        }
+    )
+    result = PlanValidator(planner=None).validate(plan, _env())
+    assert result.is_valid is True
+
+
+def test_fetch_namingsql_param_count_mismatch() -> None:
+    plan = _plan(
+        {
+            "definitions": [],
+            "return_expr": {
+                "type": "query_call",
+                "query_kind": "fetch_one",
+                "bo_id": "bo:CustomerBO",
+                "source_name": "findById",
+                "naming_sql_id": "bo:CustomerBO:sql:findById",
+                "pairs": [],
+            },
+        }
+    )
+    issues = PlanValidator(planner=None).validate(plan, _env()).issues
+    assert any(item.code == "naming_sql_param_mismatch" for item in issues)
+
+
+def test_fetch_namingsql_missing_expected_type_warns() -> None:
+    env = _env()
+    env.registry.bos["bo:CustomerBO"].naming_sqls_by_id["bo:CustomerBO:sql:findById"] = NormalizedNamingSQLDef(
+        naming_sql_id="bo:CustomerBO:sql:findById",
+        naming_sql_name="findById",
+        bo_id="bo:CustomerBO",
+        params=[
+            NormalizedNamingSQLParam(
+                param_id="findById:0",
+                param_name="id",
+                data_type="",
+                data_type_name="",
+                is_list=None,
+                normalized_type_ref=NormalizedNamingTypeRef(data_type="", data_type_name="", is_list=None, is_unknown=True),
+            )
+        ],
+    )
+    plan = _plan(
+        {
+            "definitions": [],
+            "return_expr": {
+                "type": "query_call",
+                "query_kind": "fetch_one",
+                "bo_id": "bo:CustomerBO",
+                "source_name": "findById",
+                "naming_sql_id": "bo:CustomerBO:sql:findById",
+                "pairs": [{"key": "id", "value": {"type": "literal", "value": 1001}}],
+            },
+        }
+    )
+    issues = PlanValidator(planner=None).validate(plan, env).issues
+    assert any(item.code == "naming_sql_param_data_type_missing" and item.severity == "warning" for item in issues)
+    assert any(item.code == "naming_sql_param_data_type_name_missing" and item.severity == "warning" for item in issues)

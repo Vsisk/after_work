@@ -123,6 +123,7 @@ def _normalize_naming_sqls(raw_mappings: Any) -> List[NamingSQLDef]:
                         "is_sync": bool(sql_row.get("is_sync", False)),
                         **mapping_meta,
                     },
+                    raw_payload=dict(sql_row),
                 )
             )
     return naming_sqls
@@ -144,6 +145,7 @@ def _normalize_params(raw_params: Any) -> List[ParameterDef]:
                     "raw_data_type_name": _as_text(item.get("data_type_name")),
                     "raw_is_list": bool(item.get("is_list", False)),
                 },
+                raw_payload=dict(item),
             )
         )
     return params
