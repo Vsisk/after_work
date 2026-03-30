@@ -156,3 +156,27 @@ def test_is_expandable_context_type() -> None:
     assert is_expandable_context_type("extattr") is True
     assert is_expandable_context_type("basic") is False
     assert is_expandable_context_type("STRING") is False
+
+
+def test_sub_properties_expand_even_without_return_type() -> None:
+    payload = {
+        "global_context": {
+            "property_id": "root",
+            "property_name": "root",
+            "sub_properties": [
+                {
+                    "property_id": "customer",
+                    "property_name": "customer",
+                    "sub_properties": [
+                        {"property_id": "gender", "property_name": "gender"},
+                        {"property_id": "id", "property_name": "id"},
+                    ],
+                }
+            ],
+        }
+    }
+
+    registry = load_context_registry_from_json(payload)
+
+    assert "$ctx$.root.customer.gender" in registry.nodes_by_access_path
+    assert "$ctx$.root.customer.id" in registry.nodes_by_access_path

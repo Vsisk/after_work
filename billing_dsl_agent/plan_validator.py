@@ -32,6 +32,7 @@ from billing_dsl_agent.models import (
     FieldAccessPlanNode,
     LiteralPlanNode,
 )
+from billing_dsl_agent.resource_manager import normalize_function_type
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -62,15 +63,56 @@ class PlanValidator:
     def validate(self, plan: ProgramPlan, env: FilteredEnvironment) -> ValidationResult:
         current = plan
         attempts = 0
+        repair_attempts = []
+        llm_errors = []
         while True:
             issues = self._collect_issues(current, env)
-            if not issues:
-                return ValidationResult(is_valid=True, issues=[], repaired_plan=current)
+            blocking_issues = [item for item in issues if item.severity != "warning"]
+            if not blocking_issues:
+                return ValidationResult(
+                    is_valid=True,
+                    issues=issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
             if self.planner is None or attempts >= self.max_retries:
-                return ValidationResult(is_valid=False, issues=issues, repaired_plan=current)
-            repaired = self.planner.repair(current, env, issues)
+                return ValidationResult(
+                    is_valid=False,
+                    issues=blocking_issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
+            repaired = self.planner.repair(current, env, blocking_issues)
+            repair_attempts = list(getattr(self.planner, "repair_attempts", repair_attempts))
+            llm_errors = list(getattr(self.planner, "llm_errors", llm_errors))
             if repaired is None:
-                return ValidationResult(is_valid=False, issues=issues, repaired_plan=current)
+                return ValidationResult(
+                    is_valid=False,
+                    issues=blocking_issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
+            if _plans_equivalent(current, repaired):
+                issues = _dedupe_issues(
+                    [
+                        *blocking_issues,
+                        issue(
+                            "repair_no_progress",
+                            "repair returned an equivalent invalid plan; stop repair loop",
+                            "program",
+                        ),
+                    ]
+                )
+                return ValidationResult(
+                    is_valid=False,
+                    issues=issues,
+                    repaired_plan=current,
+                    repair_attempts=list(repair_attempts),
+                    llm_errors=list(llm_errors),
+                )
             current = repaired
             attempts += 1
 
@@ -346,6 +388,40 @@ def _validate_expr_semantics(
                         f"{path}.args",
                     )
                 )
+            param_defs = list(getattr(function, "param_defs", []) or [])
+            if param_defs:
+                for arg_index, expected in enumerate(param_defs):
+                    if arg_index >= len(expr.args):
+                        break
+                    if expected.normalized_param_type == "unknown":
+                        issues.append(
+                            issue(
+                                "function_param_type_unknown",
+                                f"function param type unresolved: {function_id}.{expected.param_name}",
+                                f"{path}.args[{arg_index}]",
+                                severity="warning",
+                            )
+                        )
+                        continue
+                    actual_ref = _infer_expr_type(expr.args[arg_index], env)
+                    if actual_ref.normalized_type == "unknown":
+                        issues.append(
+                            issue(
+                                "function_arg_type_unresolved",
+                                f"function arg type unresolved for {function_id}.{expected.param_name}",
+                                f"{path}.args[{arg_index}]",
+                                severity="warning",
+                            )
+                        )
+                        continue
+                    if expected.normalized_param_type != actual_ref.normalized_type:
+                        issues.append(
+                            issue(
+                                "function_arg_type_mismatch",
+                                f"function arg type mismatch for {function_id}.{expected.param_name}: expected={expected.normalized_param_type}, actual={actual_ref.normalized_type}",
+                                f"{path}.args[{arg_index}]",
+                            )
+                        )
         for arg_index, argument in enumerate(expr.args):
             issues.extend(_validate_expr_semantics(argument, env, f"{path}.args[{arg_index}]"))
         return issues
@@ -780,12 +856,21 @@ def _child_expressions(node: ExprPlanNode) -> list[ExprPlanNode]:
 
 
 def _resolve_context_id(ref: str, env: FilteredEnvironment, allowed_ids: set[str] | None = None) -> str | None:
+    local_set = env.visible_local_context
+    if ref in local_set.nodes_by_id and (allowed_ids is None or ref in allowed_ids):
+        return ref
+    local_by_name = local_set.nodes_by_property_name.get(ref.removeprefix("$local$."))
+    if local_by_name is not None and local_by_name.access_path == ref:
+        if allowed_ids is None or local_by_name.resource_id in allowed_ids:
+            return local_by_name.resource_id
+
     registry = env.registry
     if ref in registry.contexts:
         if allowed_ids is None or ref in allowed_ids:
             return ref
+    aliases = _context_ref_aliases(ref)
     for context_id, context in registry.contexts.items():
-        if context.path == ref and (allowed_ids is None or context_id in allowed_ids):
+        if context.path in aliases and (allowed_ids is None or context_id in allowed_ids):
             return context_id
     return None
 
@@ -808,6 +893,32 @@ def _resolve_function(expr: FunctionCallPlanNode, env: FilteredEnvironment) -> t
         if function.full_name == expr.function_name or function.name == expr.function_name:
             return function_id, function
     return None, None
+
+
+def _infer_expr_type(expr: ExprPlanNode, env: FilteredEnvironment) -> Any:
+    if isinstance(expr, LiteralPlanNode):
+        value = expr.value
+        if isinstance(value, bool):
+            return normalize_function_type("boolean")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return normalize_function_type("int")
+        if isinstance(value, float):
+            return normalize_function_type("double")
+        if isinstance(value, str):
+            return normalize_function_type("string")
+        return normalize_function_type(None)
+    if isinstance(expr, ListLiteralPlanNode):
+        if not expr.items:
+            return normalize_function_type("list[unknown]")
+        first_type = _infer_expr_type(expr.items[0], env)
+        if first_type.normalized_type == "unknown":
+            return normalize_function_type("list[unknown]")
+        return normalize_function_type(f"list[{first_type.normalized_type}]")
+    if isinstance(expr, FunctionCallPlanNode):
+        _, fn = _resolve_function(expr, env)
+        if fn is not None and getattr(fn, "return_type", ""):
+            return normalize_function_type(getattr(fn, "return_type_raw", "") or getattr(fn, "return_type", ""))
+    return normalize_function_type(None)
 
 
 def _bo_has_field(bo: Any, field_name: str) -> bool:
@@ -908,6 +1019,15 @@ def _suffix_name(value: str) -> str:
     return value.split(":")[-1] if value else value
 
 
+def _context_ref_aliases(ref: str) -> set[str]:
+    aliases = {ref}
+    if ref.startswith("$ctx$.root."):
+        aliases.add("$ctx$." + ref[len("$ctx$.root.") :])
+    elif ref.startswith("$ctx$."):
+        aliases.add("$ctx$.root." + ref[len("$ctx$.") :])
+    return aliases
+
+
 def _dedupe_issues(issues: list[ValidationIssue]) -> list[ValidationIssue]:
     seen: set[tuple[str, str, str, str]] = set()
     deduped: list[ValidationIssue] = []
@@ -918,6 +1038,10 @@ def _dedupe_issues(issues: list[ValidationIssue]) -> list[ValidationIssue]:
         seen.add(key)
         deduped.append(current)
     return deduped
+
+
+def _plans_equivalent(left: ProgramPlan, right: ProgramPlan) -> bool:
+    return left.model_dump(mode="python", exclude={"raw_plan"}) == right.model_dump(mode="python", exclude={"raw_plan"})
 
 
 def parse_program_plan_payload(raw: dict[str, Any]) -> ProgramPlan:

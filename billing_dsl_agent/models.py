@@ -23,6 +23,38 @@ class ContextResource:
 
 
 @dataclass(slots=True)
+class RawLocalContextWithSource:
+    payload: Dict[str, Any]
+    source_node_path: str
+    source_node_id: str = ""
+    depth: int = 0
+
+
+@dataclass(slots=True)
+class NormalizedLocalContextNode:
+    resource_id: str
+    property_id: str
+    property_name: str
+    access_path: str
+    property_type: str = "normal"
+    annotation: str = ""
+    source_node_path: str = ""
+    source_node_id: str = ""
+    depth: int = 0
+    data_source: Dict[str, Any] = field(default_factory=dict)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class VisibleLocalContextSet:
+    nodes_by_id: Dict[str, NormalizedLocalContextNode] = field(default_factory=dict)
+    nodes_by_property_name: Dict[str, NormalizedLocalContextNode] = field(default_factory=dict)
+    ordered_nodes: List[NormalizedLocalContextNode] = field(default_factory=list)
+    source_trace: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class BOResource:
     resource_id: str
     bo_name: str
@@ -44,9 +76,16 @@ class FunctionResource:
     name: str
     full_name: str
     description: str = ""
+    function_kind: str = "func"
     signature: str = ""
+    signature_display: str = ""
     params: List[str] = field(default_factory=list)
+    param_defs: List["FunctionParamResource"] = field(default_factory=list)
+    return_type_raw: str = ""
     return_type: str = ""
+    return_type_ref: "NormalizedTypeRef" | None = None
+    source_metadata: Dict[str, Any] = field(default_factory=dict)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
     scope: str = "func"
     tags: List[str] = field(default_factory=list)
 
@@ -60,12 +99,40 @@ class ResourceRegistry:
 
 
 @dataclass(slots=True)
+class NormalizedTypeRef:
+    raw_type: str = ""
+    normalized_type: str = "unknown"
+    category: str = "unknown"
+    is_list: bool = False
+    item_type: str | None = None
+    is_unknown: bool = True
+
+
+@dataclass(slots=True)
+class FunctionParamResource:
+    param_id: str
+    param_name: str
+    param_type_raw: str = ""
+    normalized_param_type: str = "unknown"
+    type_ref: NormalizedTypeRef | None = None
+    is_list: bool = False
+    item_type: str | None = None
+    is_optional: bool | None = None
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class FilteredEnvironment:
     registry: ResourceRegistry
     selected_global_context_ids: List[str] = field(default_factory=list)
     selected_local_context_ids: List[str] = field(default_factory=list)
     selected_bo_ids: List[str] = field(default_factory=list)
     selected_function_ids: List[str] = field(default_factory=list)
+    selected_global_contexts: List[ContextResource] = field(default_factory=list)
+    visible_local_context: VisibleLocalContextSet = field(default_factory=VisibleLocalContextSet)
+    selected_bos: List[BOResource] = field(default_factory=list)
+    selected_functions: List[FunctionResource] = field(default_factory=list)
+    selection_debug: "EnvironmentSelectionBundle | None" = None
 
 
 @dataclass(slots=True)
@@ -100,6 +167,51 @@ class ValidationIssue(StrictModel):
     message: str
     path: str = ""
     severity: str = "error"
+
+
+class LLMErrorRecord(StrictModel):
+    stage: str
+    code: str
+    message: str
+    raw_text: str = ""
+    raw_payload: Dict[str, Any] | None = None
+    exception_type: str = ""
+
+
+class LLMAttemptRecord(StrictModel):
+    stage: str
+    attempt_index: int
+    request_payload: Dict[str, Any] | None = None
+    response_payload: Dict[str, Any] | None = None
+    parsed_ok: bool = False
+    errors: List[LLMErrorRecord] = Field(default_factory=list)
+
+
+class ResourceSelectionOutput(StrictModel):
+    resource_id_list: List[str] = Field(default_factory=list)
+
+
+class ResourceSelectionDebug(StrictModel):
+    resource_type: str
+    strategy: str
+    candidate_ids: List[str] = Field(default_factory=list)
+    selected_ids: List[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    llm_errors: List[LLMErrorRecord] = Field(default_factory=list)
+
+
+class EnvironmentSelectionBundle(StrictModel):
+    global_context: ResourceSelectionDebug
+    local_context: ResourceSelectionDebug
+    bo: ResourceSelectionDebug
+    function: ResourceSelectionDebug
+
+
+class GenerateDSLDebug(StrictModel):
+    resource_selection: EnvironmentSelectionBundle | None = None
+    plan_attempts: List[LLMAttemptRecord] = Field(default_factory=list)
+    repair_attempts: List[LLMAttemptRecord] = Field(default_factory=list)
+    llm_errors: List[LLMErrorRecord] = Field(default_factory=list)
 
 
 class LiteralPlanNode(StrictModel):
@@ -148,7 +260,7 @@ class QueryCallPlanNode(StrictModel):
     data_source: str | None = None
     naming_sql_id: str | None = None
     filters: List[QueryFilterPlanNode] = Field(default_factory=list)
-    where: "ExprPlanNode" | None = None
+    where: ExprPlanNode | None = None
     pairs: List[QueryPairPlanNode] = Field(default_factory=list)
 
 
@@ -297,6 +409,8 @@ class ValidationResult(StrictModel):
     is_valid: bool
     issues: List[ValidationIssue] = Field(default_factory=list)
     repaired_plan: ProgramPlan | None = None
+    repair_attempts: List[LLMAttemptRecord] = Field(default_factory=list)
+    llm_errors: List[LLMErrorRecord] = Field(default_factory=list)
 
 
 class GenerateDSLRequest(StrictModel):
@@ -313,6 +427,7 @@ class GenerateDSLResponse(StrictModel):
     ast: ProgramNode | None = None
     validation: ValidationResult | None = None
     failure_reason: str = ""
+    debug: GenerateDSLDebug | None = None
 
 
 QueryFilterPlanNode.model_rebuild()

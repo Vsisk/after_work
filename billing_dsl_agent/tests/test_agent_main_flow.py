@@ -123,7 +123,12 @@ def _dataset() -> dict:
                             {
                                 "func_name": "Upper",
                                 "func_desc": "uppercase string",
-                                "param_list": [{"param_name": "value"}],
+                                "param_list": [{"param_name": "value", "type": "String"}],
+                            },
+                            {
+                                "func_name": "Now",
+                                "func_desc": "return now",
+                                "param_list": [],
                             }
                         ],
                     }
@@ -140,7 +145,7 @@ def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> Genera
         project_id="proj-1",
         node_def=NodeDef(
             node_id="n1",
-            node_path="invoice.customer.title",
+            node_path="$.children[0].children[0]",
             node_name="title",
             description="customer title",
             is_ab=is_ab,
@@ -177,19 +182,25 @@ def test_loader_normalization_and_filtering_pipeline() -> None:
     assert filtered.selected_global_context_ids
     assert filtered.selected_bo_ids
     assert filtered.selected_function_ids
+    fn = filtered.registry.functions["function:Customer.GetSalutation"]
+    assert fn.return_type == "string"
+    assert fn.param_defs[0].normalized_param_type == "unknown"
+    assert filtered.registry.functions["function:String.Now"].param_defs == []
+    assert "function:Customer.GetSalutation" in filtered.registry.functions
+    assert filtered.selection_debug is not None
+    assert filtered.selection_debug.global_context.selected_ids
 
 
 def test_local_context_inherits_from_edsl_ancestors() -> None:
     filtered = _build_filtered_env()
-    local_resources = {cid: filtered.registry.contexts[cid] for cid in filtered.selected_local_context_ids}
-    names = {item.name for item in local_resources.values()}
+    names = {item.property_name for item in filtered.visible_local_context.ordered_nodes}
     assert "invoiceId" in names
     assert "customerLevel" in names
 
 
 def test_only_parent_or_parent_list_provide_local_context() -> None:
     filtered = _build_filtered_env()
-    names = {filtered.registry.contexts[cid].name for cid in filtered.selected_local_context_ids}
+    names = {item.property_name for item in filtered.visible_local_context.ordered_nodes}
     assert "should_not_visible" not in names
 
 
@@ -227,6 +238,9 @@ def test_planner_only_sees_filtered_ids() -> None:
     assert payload is not None
     assert "selected_function_ids" in payload["environment"]
     assert "function:Customer.GetSalutation" in payload["environment"]["selected_function_ids"]
+    assert response.debug is not None
+    assert response.debug.resource_selection is not None
+    assert "function:Customer.GetSalutation" in response.debug.resource_selection.function.selected_ids
 
 
 def test_generate_dsl_renders_program_defs_and_final_expression() -> None:
@@ -299,6 +313,9 @@ def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
     assert response.failure_reason == "plan validation failed"
     assert response.validation is not None
     assert any(item.code == "undefined_var_ref" for item in response.validation.issues)
+    assert any(item.code == "repair_no_progress" for item in response.validation.issues)
+    assert response.debug is not None
+    assert len(response.debug.repair_attempts) == 1
 
 
 def test_select_one_supports_where_boolean_ast_render() -> None:

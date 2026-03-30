@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, List
-from typing import Any, Dict, Optional, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List
 
-from billing_dsl_agent.models import NodeDef
+from billing_dsl_agent.models import LLMErrorRecord, NodeDef, ResourceSelectionOutput
+from billing_dsl_agent.services.llm_client import OpenAILLMClient
 
 
 @dataclass(slots=True)
@@ -25,46 +24,61 @@ class SemanticSelector:
         user_query: str,
         candidate_summaries: Iterable[CandidateSummary],
     ) -> List[str]:
-        raise NotImplementedError
+        return self.select_with_debug(task_type, node_info, user_query, candidate_summaries).selected_ids
 
-
-class OpenAISelectorClient(Protocol):
-    def create_plan(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        ...
-
-
-@dataclass(slots=True)
-class OpenAISemanticSelector(SemanticSelector):
-    client: OpenAISelectorClient
-    prompt_path: Path = Path(__file__).resolve().parent / "prompts" / "semantic_selector_prompt.json"
-    default_top_k: int = 5
-
-    def select(
+    def select_with_debug(
         self,
         task_type: str,
         node_info: NodeDef,
         user_query: str,
         candidate_summaries: Iterable[CandidateSummary],
-    ) -> List[str]:
+    ) -> "SelectionResult":
+        raise NotImplementedError
+
+
+@dataclass(slots=True)
+class SelectionResult:
+    selected_ids: List[str]
+    candidate_ids: List[str] = field(default_factory=list)
+    llm_errors: List[LLMErrorRecord] = field(default_factory=list)
+    fallback_used: bool = False
+
+
+@dataclass(slots=True)
+class OpenAISemanticSelector(SemanticSelector):
+    client: OpenAILLMClient | Any
+    prompt_lang: str = "zh"
+    prompt_key: str = "semantic_selector_prompt"
+    default_top_k: int = 5
+
+    def select_with_debug(
+        self,
+        task_type: str,
+        node_info: NodeDef,
+        user_query: str,
+        candidate_summaries: Iterable[CandidateSummary],
+    ) -> SelectionResult:
         candidates = list(candidate_summaries)
         if not candidates:
-            return []
+            return SelectionResult(selected_ids=[], candidate_ids=[])
 
-        prompt = self._load_prompt()
-        payload = {
-            "mode": "semantic_select",
-            "system_prompt": prompt.get("system", ""),
-            "instruction": prompt.get("instruction", ""),
-            "input": {
-                "task_type": task_type,
-                "user_query": user_query,
-                "node_def": {
+        allowed = {item.resource_id for item in candidates}
+        fallback_ids = [item.resource_id for item in candidates[: self.default_top_k]]
+        candidate_ids = [item.resource_id for item in candidates]
+        prompt_params = {
+            "task_type": task_type,
+            "user_query": user_query,
+            "node_def_json": json.dumps(
+                {
                     "node_id": node_info.node_id,
                     "node_name": node_info.node_name,
                     "node_path": node_info.node_path,
                     "description": node_info.description,
                 },
-                "candidate_list": [
+                ensure_ascii=False,
+            ),
+            "candidate_list_json": json.dumps(
+                [
                     {
                         "resource_id": item.resource_id,
                         "description": item.description,
@@ -72,63 +86,64 @@ class OpenAISemanticSelector(SemanticSelector):
                     }
                     for item in candidates
                 ],
-                "budget": {"max_items": self.default_top_k},
-            },
-            "output_format": {"resource_id_list": []},
+                ensure_ascii=False,
+            ),
+            "max_items": self.default_top_k,
         }
-        raw = self.client.create_plan(payload)
-        resource_ids = self._parse_output(raw)
-        if not resource_ids:
-            return []
+        execution = self.client.execute_structured(
+            prompt_key=self.prompt_key,
+            lang=self.prompt_lang,
+            prompt_params=prompt_params,
+            response_model=ResourceSelectionOutput,
+            stage="semantic_select",
+        )
+        if execution.parsed is None:
+            return SelectionResult(
+                selected_ids=fallback_ids,
+                candidate_ids=candidate_ids,
+                llm_errors=list(execution.errors),
+                fallback_used=True,
+            )
 
-        allowed = {item.resource_id for item in candidates}
-        filtered = [item for item in resource_ids if item in allowed]
-        return filtered[: self.default_top_k]
-
-    def _load_prompt(self) -> Dict[str, str]:
-        try:
-            data = json.loads(self.prompt_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {"system": "", "instruction": ""}
-        if not isinstance(data, dict):
-            return {"system": "", "instruction": ""}
-        return {str(k): str(v) for k, v in data.items()}
-
-    def _parse_output(self, raw: Optional[Dict[str, Any]]) -> List[str]:
-        if not isinstance(raw, dict):
-            return []
-
-        output = raw.get("resource_id_list")
-        if isinstance(output, list):
-            return [str(item) for item in output if isinstance(item, str)]
-
-        raw_output = raw.get("output")
-        if isinstance(raw_output, str):
-            try:
-                parsed = json.loads(raw_output)
-            except json.JSONDecodeError:
-                return []
-            if isinstance(parsed, dict):
-                ids = parsed.get("resource_id_list")
-                if isinstance(ids, list):
-                    return [str(item) for item in ids if isinstance(item, str)]
-        return []
-
+        filtered = [item for item in execution.parsed.resource_id_list if item in allowed]
+        if filtered:
+            return SelectionResult(
+                selected_ids=filtered[: self.default_top_k],
+                candidate_ids=candidate_ids,
+                llm_errors=list(execution.errors),
+                fallback_used=False,
+            )
+        errors = list(execution.errors)
+        errors.append(
+            LLMErrorRecord(
+                stage="semantic_select",
+                code="empty_resource_selection",
+                message="semantic selector returned no valid resource ids; fallback to rule-ranked candidates",
+                raw_payload=execution.raw_payload,
+            )
+        )
+        return SelectionResult(
+            selected_ids=fallback_ids,
+            candidate_ids=candidate_ids,
+            llm_errors=errors,
+            fallback_used=True,
+        )
 
 @dataclass(slots=True)
 class MockSemanticSelector(SemanticSelector):
     top_k: int = 5
 
-    def select(
+    def select_with_debug(
         self,
         task_type: str,
         node_info: NodeDef,
         user_query: str,
         candidate_summaries: Iterable[CandidateSummary],
-    ) -> List[str]:
+    ) -> SelectionResult:
+        candidates = list(candidate_summaries)
         terms = self._tokens(f"{node_info.node_name} {node_info.node_path} {node_info.description} {user_query} {task_type}")
         scored: list[tuple[float, str]] = []
-        for item in candidate_summaries:
+        for item in candidates:
             text = " ".join([item.description, item.resource_id, *item.tags])
             item_terms = self._tokens(text)
             overlap = len(terms & item_terms)
@@ -136,7 +151,10 @@ class MockSemanticSelector(SemanticSelector):
             if score > 0:
                 scored.append((score, item.resource_id))
         scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        return [resource_id for _, resource_id in scored[: self.top_k]]
+        return SelectionResult(
+            selected_ids=[resource_id for _, resource_id in scored[: self.top_k]],
+            candidate_ids=[item.resource_id for item in candidates],
+        )
 
     @staticmethod
     def _tokens(text: str) -> set[str]:
