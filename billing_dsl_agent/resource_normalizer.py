@@ -10,6 +10,9 @@ from billing_dsl_agent.models import (
     ContextResource,
     FunctionParamResource,
     FunctionResource,
+    NormalizedNamingSQLDef,
+    NormalizedNamingSQLParam,
+    NormalizedNamingTypeRef,
     ResourceRegistry,
 )
 from billing_dsl_agent.resource_manager import normalize_function_type
@@ -89,9 +92,12 @@ class ResourceNormalizer:
             for bo in items:
                 resource_id = f"bo:{bo.bo_name}"
                 field_ids = [f"{resource_id}:field:{field.name}" for field in bo.fields]
-                naming_sql_ids = [f"{resource_id}:sql:{sql.name}" for sql in bo.query_capability.naming_sqls if sql.name]
+                naming_sql_ids: list[str] = []
+                naming_sql_defs: list[NormalizedNamingSQLDef] = []
+                naming_sqls_by_id: dict[str, NormalizedNamingSQLDef] = {}
                 naming_sql_name_by_key: dict[str, str] = {}
                 naming_sql_param_names_by_key: dict[str, list[str]] = {}
+                naming_sql_signatures_by_key: dict[str, list[NormalizedNamingSQLParam]] = {}
                 data_source = ""
                 for sql in bo.query_capability.naming_sqls:
                     ds = str(sql.metadata.get("or_mapping_data_source") or "")
@@ -101,19 +107,62 @@ class ResourceNormalizer:
                     sql_id = str(sql.id or "").strip()
                     if not sql_name:
                         continue
-                    param_names = [str(param.name or "").strip() for param in sql.params if str(param.name or "").strip()]
-                    for key in {sql_name, sql_id, f"{resource_id}:sql:{sql_name}"}:
+                    normalized_params: list[NormalizedNamingSQLParam] = []
+                    param_names: list[str] = []
+                    for idx, param in enumerate(sql.params):
+                        param_name = str(param.name or "").strip()
+                        if param_name:
+                            param_names.append(param_name)
+                        type_ref = NormalizedNamingTypeRef(
+                            data_type=str(param.type_ref.data_type or "").strip(),
+                            data_type_name=str(param.type_ref.data_type_name or "").strip(),
+                            is_list=param.type_ref.is_list if isinstance(param.type_ref.is_list, bool) else None,
+                        )
+                        type_ref.is_unknown = not bool(type_ref.data_type and type_ref.data_type_name and type_ref.is_list is not None)
+                        normalized_params.append(
+                            NormalizedNamingSQLParam(
+                                param_id=f"{sql_id or sql_name}:{idx}",
+                                param_name=param_name or f"param_{idx}",
+                                data_type=type_ref.data_type,
+                                data_type_name=type_ref.data_type_name,
+                                is_list=type_ref.is_list,
+                                normalized_type_ref=type_ref,
+                                raw_payload=dict(getattr(param, "raw_payload", {}) or getattr(param, "metadata", {})),
+                            )
+                        )
+                    resolved_naming_sql_id = sql_id or f"{resource_id}:sql:{sql_name}"
+                    naming_sql_ids.append(resolved_naming_sql_id)
+                    signature_display = f"{sql_name}(" + ", ".join(
+                        f"{item.param_name}:{item.data_type}/{item.data_type_name}[{'*' if item.is_list else ''}]"
+                        for item in normalized_params
+                    ) + ")"
+                    normalized_sql = NormalizedNamingSQLDef(
+                        naming_sql_id=resolved_naming_sql_id,
+                        naming_sql_name=sql_name,
+                        bo_id=resource_id,
+                        description=sql.description,
+                        params=normalized_params,
+                        signature_display=signature_display,
+                        raw_payload=dict(getattr(sql, "raw_payload", {}) or {}),
+                    )
+                    naming_sql_defs.append(normalized_sql)
+                    naming_sqls_by_id[resolved_naming_sql_id] = normalized_sql
+                    for key in {sql_name, sql_id, resolved_naming_sql_id, f"{resource_id}:sql:{sql_name}"}:
                         if key:
                             naming_sql_name_by_key[key] = sql_name
                             naming_sql_param_names_by_key[key] = list(param_names)
+                            naming_sql_signatures_by_key[key] = list(normalized_params)
                 registry[resource_id] = BOResource(
                     resource_id=resource_id,
                     bo_name=bo.bo_name,
                     field_ids=field_ids,
                     data_source=data_source,
                     naming_sql_ids=naming_sql_ids,
+                    naming_sqls=naming_sql_defs,
+                    naming_sqls_by_id=naming_sqls_by_id,
                     naming_sql_name_by_key=naming_sql_name_by_key,
                     naming_sql_param_names_by_key=naming_sql_param_names_by_key,
+                    naming_sql_signatures_by_key=naming_sql_signatures_by_key,
                     scope=scope,
                     domain=bo.bo_name,
                     description=bo.description,

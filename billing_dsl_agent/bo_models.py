@@ -16,6 +16,7 @@ class ParameterDef:
     name: str = ""
     type_ref: TypeRef = field(default_factory=TypeRef)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -27,6 +28,7 @@ class NamingSQLDef:
     sql: str = ""
     params: List[ParameterDef] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
