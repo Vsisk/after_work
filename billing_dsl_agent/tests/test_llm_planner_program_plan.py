@@ -1,12 +1,22 @@
 from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
-from billing_dsl_agent.models import BOResource, ContextResource, FilteredEnvironment, FunctionResource, NodeDef, ResourceRegistry, ValidationIssue
+from billing_dsl_agent.models import (
+    BOResource,
+    ContextResource,
+    FilteredEnvironment,
+    FunctionResource,
+    NodeDef,
+    NormalizedLocalContextNode,
+    ResourceRegistry,
+    ValidationIssue,
+    VisibleLocalContextSet,
+)
 
 
 def _env() -> FilteredEnvironment:
     return FilteredEnvironment(
         registry=ResourceRegistry(),
         selected_global_context_ids=["context:$ctx$.customer.gender"],
-        selected_local_context_ids=["local:$local$.invoiceId"],
+        selected_local_context_ids=["local_context:lc_invoice_id"],
         selected_bo_ids=["bo:CustomerBO"],
         selected_function_ids=["function:Customer.GetSalutation"],
         selected_global_contexts=[
@@ -16,6 +26,32 @@ def _env() -> FilteredEnvironment:
                 path="$ctx$.customer.gender",
             )
         ],
+        visible_local_context=VisibleLocalContextSet(
+            nodes_by_id={
+                "local_context:lc_invoice_id": NormalizedLocalContextNode(
+                    resource_id="local_context:lc_invoice_id",
+                    property_id="lc_invoice_id",
+                    property_name="invoiceId",
+                    access_path="$local$.invoiceId",
+                )
+            },
+            nodes_by_property_name={
+                "invoiceId": NormalizedLocalContextNode(
+                    resource_id="local_context:lc_invoice_id",
+                    property_id="lc_invoice_id",
+                    property_name="invoiceId",
+                    access_path="$local$.invoiceId",
+                )
+            },
+            ordered_nodes=[
+                NormalizedLocalContextNode(
+                    resource_id="local_context:lc_invoice_id",
+                    property_id="lc_invoice_id",
+                    property_name="invoiceId",
+                    access_path="$local$.invoiceId",
+                )
+            ],
+        ),
         selected_bos=[
             BOResource(
                 resource_id="bo:CustomerBO",

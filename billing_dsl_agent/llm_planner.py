@@ -157,15 +157,15 @@ class LLMPlanner:
                 }
                 for item in env.selected_global_contexts
             ],
-            "selected_local_contexts": [
+            "selected_local_context_nodes": [
                 {
                     "resource_id": item.resource_id,
-                    "path": item.path,
-                    "name": item.name,
-                    "description": item.description,
-                    "scope": item.scope,
+                    "property_id": item.property_id,
+                    "property_name": item.property_name,
+                    "access_path": item.access_path,
+                    "annotation": item.annotation,
                 }
-                for item in env.selected_local_contexts
+                for item in env.visible_local_context.ordered_nodes
             ],
             "selected_bos": [
                 {

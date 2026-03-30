@@ -23,6 +23,38 @@ class ContextResource:
 
 
 @dataclass(slots=True)
+class RawLocalContextWithSource:
+    payload: Dict[str, Any]
+    source_node_path: str
+    source_node_id: str = ""
+    depth: int = 0
+
+
+@dataclass(slots=True)
+class NormalizedLocalContextNode:
+    resource_id: str
+    property_id: str
+    property_name: str
+    access_path: str
+    property_type: str = "normal"
+    annotation: str = ""
+    source_node_path: str = ""
+    source_node_id: str = ""
+    depth: int = 0
+    data_source: Dict[str, Any] = field(default_factory=dict)
+    raw_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class VisibleLocalContextSet:
+    nodes_by_id: Dict[str, NormalizedLocalContextNode] = field(default_factory=dict)
+    nodes_by_property_name: Dict[str, NormalizedLocalContextNode] = field(default_factory=dict)
+    ordered_nodes: List[NormalizedLocalContextNode] = field(default_factory=list)
+    source_trace: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class BOResource:
     resource_id: str
     bo_name: str
@@ -97,7 +129,7 @@ class FilteredEnvironment:
     selected_bo_ids: List[str] = field(default_factory=list)
     selected_function_ids: List[str] = field(default_factory=list)
     selected_global_contexts: List[ContextResource] = field(default_factory=list)
-    selected_local_contexts: List[ContextResource] = field(default_factory=list)
+    visible_local_context: VisibleLocalContextSet = field(default_factory=VisibleLocalContextSet)
     selected_bos: List[BOResource] = field(default_factory=list)
     selected_functions: List[FunctionResource] = field(default_factory=list)
     selection_debug: "EnvironmentSelectionBundle | None" = None

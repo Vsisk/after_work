@@ -7,6 +7,7 @@
 - 2026-03-28 需求执行记录：根据评审意见调整 `EnvironmentBuilder` 对 function registry 的处理，改为与 contexts/bos/functions 一致的“工作副本”语义：先复制 `functions`，再基于复制后的函数集合克隆 `function_registry`，避免直接引用原 registry 引发不一致。
 - 2026-03-28 需求执行记录：按评审要求收敛 function 管理模型，移除 `FunctionRegistry.functions_by_name`，统一保留 `resource_id/function_id -> FunctionResource` 索引；同步调整 Environment 克隆逻辑、PlanValidator 函数解析分支及相关测试断言，确保 function 资源管理与其他资源一致。
 - 2026-03-28 需求执行记录：按“function 与 function_registry 仅保留一个”要求继续收敛，移除 `ResourceRegistry.function_registry` 与 `FunctionRegistry` 模型，函数统一仅由 `registry.functions (resource_id -> FunctionResource)` 管理；同步简化 EnvironmentBuilder/PlanValidator 解析逻辑与相关单测。
+- 2026-03-30 需求执行记录：完成 local context 路径聚合解析与 normalize 增强：基于 `edsl_tree + node_path(JSONPath)` 解析根到目标路径链并聚合 `local_context`；新增 local context 独立 normalized 模型（property_id/property_name/access_path/source_trace/warnings）；Environment 改为注入 `visible_local_context` 且不再混入 global context registry；同步改造 planner/validator/ast builder 消费链路与单测覆盖（含覆盖/冲突、JSONPath、registry 边界）。
 - 2026-03-30 需求执行记录：针对 StructuredLLMExecutor 与 OpenAILLMClient 功能重叠问题完成首轮收敛：OpenAILLMClient 新增 `generate/generate_raw` 别名接口，StructuredLLMExecutor 增加 `invoke_raw` 协议兼容，补充对应单测并验证通过。
 - 2026-03-30 需求执行记录：按“仅保留 OpenAILLMClient”决策完成单类收敛：将结构化执行能力迁移至 OpenAILLMClient，LLMPlanner/语义选择器改为直接依赖 client，删除 StructuredLLMExecutor 与 PromptDrivenLLMService，并同步迁移测试。
 - 2026-03-30 需求执行记录：完成 OpenAI 同 provider 多模型+VL 能力扩展：抽象 BaseOpenAILLMClient 与 LLMConfig，支持 `LLM_<NAME>_<FIELD>` / `LLM_DEFAULT_NAME` 配置路由，OpenAILLMClient 新增 `llm_name` 覆盖与多模态（image_url+本地路径）调用。

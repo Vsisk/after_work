@@ -48,7 +48,9 @@ class ASTBuilder:
             return ExprNode(kind=ExprKind.CONTEXT_REF, value=node.path)
 
         if isinstance(node, LocalRefPlanNode):
-            return ExprNode(kind=ExprKind.LOCAL_REF, value=node.path)
+            local_node = env.visible_local_context.nodes_by_id.get(node.path)
+            local_path = local_node.access_path if local_node is not None else node.path
+            return ExprNode(kind=ExprKind.LOCAL_REF, value=local_path)
 
         if isinstance(node, VarRefPlanNode):
             return ExprNode(kind=ExprKind.VAR_REF, value=node.name)
