@@ -1,370 +1,224 @@
 # Billing DSL Agent Architecture
 
-本文档总结当前仓库中 coding agent 的主执行链路，覆盖从 `GenerateDSLRequest` 输入，到 `GenerateDSLResponse` 输出的完整对象流转。当前架构已经收缩为“LLM Planning + 本地校验”的 Agent 结构：LLM 负责提出资源使用方案，本地模块只负责校验、AST 落地、DSL 渲染和最终校验。
+本文档描述当前 `billing_dsl_agent` 的收敛后架构。系统统一为**单一主链路**：
 
-## 总览
+`generate_dsl(request)`
+→ `EnvironmentBuilder`
+→ `LLMPlanner`
+→ `PlanValidator (repair loop <= 2)`
+→ `ASTBuilder`
+→ `DSLRenderer`
+→ `FinalValidator`
+→ `GenerateDSLResponse`
 
-当前 agent 有两层入口：
+---
 
-- `GenerateDSLAgentService`
-  - 更外层入口。
-  - 负责把请求委托给 orchestrator。
-- `CodeAgentOrchestrator`
-  - 核心编排器。
-  - 固定执行 `resolve -> llm plan -> local plan validate -> ast plan -> render -> validate -> explain`。
+## 1. 目录与模块
 
-核心中间对象沿主链路依次传递：
+核心模块固定为：
 
-`GenerateDSLRequest -> ResolvedEnvironment -> PlanDraft -> ValidationResult(plan) -> ValuePlan -> GeneratedDSL -> ValidationResult(dsl) -> GenerateDSLResponse`
+- `billing_dsl_agent/agent_entry.py`
+- `billing_dsl_agent/environment.py`
+- `billing_dsl_agent/llm_planner.py`
+- `billing_dsl_agent/plan_validator.py`
+- `billing_dsl_agent/ast_builder.py`
+- `billing_dsl_agent/dsl_renderer.py`
+- `billing_dsl_agent/models.py`
 
-## 模块分层图
+Prompt 资源：
 
-```mermaid
-flowchart TB
-    subgraph L1["入口层"]
-        Caller["Caller / Integrator"]
-        Service["GenerateDSLAgentService"]
-    end
+- `billing_dsl_agent/prompts/plan_prompt.txt`
+- `billing_dsl_agent/prompts/repair_prompt.txt`
+- `billing_dsl_agent/prompts/namingsql_param_prompt.txt`
 
-    subgraph L2["编排层"]
-        Orch["CodeAgentOrchestrator"]
-    end
+测试目录：
 
-    subgraph L3["Planning 与校验层"]
-        Planner["LLMPlanner"]
-        PlanValidator["PlanValidator"]
-        ParserFallback["SimpleRequirementParser (fallback)"]
-        Resolver["DefaultEnvironmentResolver"]
-        Assembler["PromptAssembler"]
-        Client["OpenAIClientAdapter"]
-    end
+- `billing_dsl_agent/tests/`
 
-    subgraph L4["规划与生成层"]
-        ValuePlanner["SimpleValuePlanner"]
-        Renderer["DefaultDSLRenderer"]
-        Validator["DefaultValidator"]
-        Explainer["DefaultExplanationBuilder"]
-    end
+---
 
-    subgraph L5["类型与协议层"]
-        Types["types/* dataclasses and enums"]
-        Protocols["protocols/* interfaces"]
-    end
+## 2. 核心设计原则
 
-    subgraph L6["配套能力"]
-        Normalize["normalize/*"]
-        ResourceIndex["resource_index.py"]
-        Tests["tests/*"]
-    end
+1. **LLM 负责方案生成**：计划生成与修复由 `LLMPlanner` 完成。
+2. **本地只做强校验**：`PlanValidator` 不做规则猜测，仅验证引用与参数合法性。
+3. **确定性落地**：`ASTBuilder` 与 `DSLRenderer` 将合法计划稳定转为 DSL。
+4. **统一契约**：`PlanDraft` 是 LLM 与系统之间唯一计划契约。
+5. **不改 DSL 语法**：渲染层仅按既有表达式语义输出 DSL 文本。
 
-    Caller --> Service
-    Service --> Orch
-    Orch --> Resolver
-    Orch --> Planner
-    Planner --> Assembler
-    Planner --> Client
-    Planner -. fallback .-> ParserFallback
-    Orch --> PlanValidator
-    Orch --> ValuePlanner
-    Orch --> Renderer
-    Orch --> Validator
-    Orch --> Explainer
+---
 
-    Service --> Types
-    Orch --> Protocols
-    Planner --> Types
-    PlanValidator --> Types
-    ParserFallback --> Types
-    Resolver --> Types
-    ValuePlanner --> Types
-    Renderer --> Types
-    Validator --> Types
-    Explainer --> Types
+## 3. 数据模型（models.py）
 
-    Normalize -. supports model normalization .-> Types
-    ResourceIndex -. auxiliary lookup helpers / debug .-> Types
-    Tests -. verify all layers .-> Service
-    Tests -. verify all layers .-> Orch
-```
+所有 dataclass 集中在 `models.py`，包括：
 
-## 类关系图
-
-```mermaid
-classDiagram
-    class GenerateDSLAgentService {
-        +orchestrator: CodeAgentOrchestrator
-        +generate(request) GenerateDSLResponse
-    }
-
-    class CodeAgentOrchestrator {
-        +llm_planner: LLMPlanner
-        +environment_resolver: EnvironmentResolver
-        +plan_validator: PlanValidator
-        +value_planner: ValuePlanner
-        +dsl_renderer: DSLRenderer
-        +validator: Validator
-        +explanation_builder: ExplanationBuilder
-        +generate(request) GenerateDSLResponse
-    }
-
-    class LLMPlanner {
-        +prompt_assembler: PromptAssembler
-        +client: OpenAIClientAdapter
-        +fallback_parser: SimpleRequirementParser
-        +plan(user_requirement, node_def, env) PlanDraft
-    }
-
-    class PromptAssembler {
-        +build_payload(user_requirement, node_def, env, model) dict
-    }
-
-    class OpenAIClientAdapter {
-        <<protocol>>
-        +create_plan_draft(payload) PlanDraft?
-    }
-
-    class PlanValidator {
-        +validate(plan, env) ValidationResult
-    }
-
-    class SimpleRequirementParser {
-        +parse(user_requirement, node_def) NodeIntent
-    }
-
-    class DefaultEnvironmentResolver {
-        +resolve(...) ResolvedEnvironment
-    }
-
-    class SimpleValuePlanner {
-        +build_plan(plan_draft, env) ValuePlan
-    }
-
-    class DefaultDSLRenderer {
-        +render(plan) GeneratedDSL
-    }
-
-    class DefaultValidator {
-        +validate(generated_dsl, request, env) ValidationResult
-    }
-
-    class DefaultExplanationBuilder {
-        +build(plan_draft, plan) StructuredExplanation
-    }
-
-    class GenerateDSLRequest
-    class GenerateDSLResponse
-    class PlanDraft
-    class NodeIntent
-    class ResolvedEnvironment
-    class ValuePlan
-    class GeneratedDSL
-    class ValidationResult
-    class StructuredExplanation
-
-    GenerateDSLAgentService --> CodeAgentOrchestrator : delegates pipeline
-    GenerateDSLAgentService --> GenerateDSLRequest : input
-    GenerateDSLAgentService --> GenerateDSLResponse : output
-
-    LLMPlanner --> PromptAssembler : build payload
-    LLMPlanner --> OpenAIClientAdapter : request draft
-    LLMPlanner --> PlanDraft : produce
-    LLMPlanner --> SimpleRequirementParser : fallback
-    LLMPlanner --> NodeIntent : derive debug intent
-
-    CodeAgentOrchestrator --> LLMPlanner : create plan draft
-    CodeAgentOrchestrator --> DefaultEnvironmentResolver : normalize environment
-    CodeAgentOrchestrator --> PlanValidator : validate plan draft
-    CodeAgentOrchestrator --> SimpleValuePlanner : build plan
-    CodeAgentOrchestrator --> DefaultDSLRenderer : render DSL
-    CodeAgentOrchestrator --> DefaultValidator : validate
-    CodeAgentOrchestrator --> DefaultExplanationBuilder : explain
-
-    CodeAgentOrchestrator --> GenerateDSLRequest : consume
-    CodeAgentOrchestrator --> PlanDraft : produce/consume
-    CodeAgentOrchestrator --> NodeIntent : produce/consume
-    CodeAgentOrchestrator --> ResolvedEnvironment : produce/consume
-    CodeAgentOrchestrator --> ValuePlan : produce/consume
-    CodeAgentOrchestrator --> GeneratedDSL : produce/consume
-    CodeAgentOrchestrator --> ValidationResult : produce
-    CodeAgentOrchestrator --> StructuredExplanation : produce
-    CodeAgentOrchestrator --> GenerateDSLResponse : assemble
-```
-
-## 主时序图
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Caller
-    participant Service as GenerateDSLAgentService
-    participant Orch as CodeAgentOrchestrator
-    participant Resolver as DefaultEnvironmentResolver
-    participant Planner as LLMPlanner
-    participant Assembler as PromptAssembler
-    participant Client as OpenAIClientAdapter
-    participant ParserFallback as SimpleRequirementParser
-    participant PlanValidator as PlanValidator
-    participant ValuePlanner as SimpleValuePlanner
-    participant Renderer as DefaultDSLRenderer
-    participant Validator as DefaultValidator
-    participant Explainer as DefaultExplanationBuilder
-
-    Caller->>Service: generate(GenerateDSLRequest)
-    Service->>Orch: generate(request)
-    Orch->>Resolver: resolve(context/bos/functions)
-    Resolver-->>Orch: ResolvedEnvironment
-    Orch->>Planner: plan(user_requirement, node_def, env)
-    Planner->>Assembler: build_payload(user_requirement, node_def, env, model)
-    Assembler-->>Planner: payload
-    Planner->>Client: create_plan_draft(payload)
-    Client-->>Planner: PlanDraft | None
-
-    alt draft is None
-        Planner->>ParserFallback: parse(user_requirement, node_def)
-        ParserFallback-->>Planner: NodeIntent
-        Planner-->>Orch: PlanDraft(fallback)
-    else draft exists
-        Planner-->>Orch: PlanDraft
-    end
-
-    Orch->>PlanValidator: validate(plan_draft, env)
-    PlanValidator-->>Orch: ValidationResult
-
-    alt plan invalid
-        Orch-->>Service: GenerateDSLResponse(success=false)
-    else plan valid
-        Orch->>ValuePlanner: build_plan(plan_draft, env)
-        ValuePlanner-->>Orch: ValuePlan
-        Orch->>Renderer: render(plan)
-        Renderer-->>Orch: GeneratedDSL
-        Orch->>Validator: validate(generated_dsl, request, env)
-        Validator-->>Orch: ValidationResult
-        Orch->>Explainer: build(plan_draft, plan)
-        Explainer-->>Orch: StructuredExplanation
-        Orch-->>Service: GenerateDSLResponse(success=validation_result.is_valid)
-    end
-
-    Service-->>Caller: GenerateDSLResponse
-```
-
-## 对象是怎么传递的
-
-### 1. 输入元数据层
-
-这一层对象由调用方直接提供，负责定义“要生成什么”和“可用什么资源”。
-
-- `GenerateDSLRequest`
-  - 主输入对象。
-  - 包含 `user_requirement`、`node_def`、`global_context_vars`、`local_context_vars`、`available_bos`、`available_functions`。
 - `NodeDef`
-  - 描述目标节点本身，比如路径、名称、数据类型。
-- 上下文、BO、函数定义
-  - 作为环境资源池输入给 resolver。
-
-### 2. Planning 层
-
-这一层把自然语言需求变成结构化执行计划。
-
-- `ResolvedEnvironment`
-  - 由 environment resolver 产出。
-  - 是 request 资源的规范化视图。
+- `Environment`
 - `PlanDraft`
-  - 由 `LLMPlanner` 产出。
-  - 表示 LLM 提出的显式资源使用方案。
-  - 核心字段是：
-    - `context_refs`
-    - `bo_refs`
-    - `function_refs`
-    - `semantic_slots`
-    - `expression_pattern`
-
-### 3. 本地校验与执行规划层
-
-这一层先校验 LLM 计划，再把计划落成可渲染 DSL 的中间表达。
-
-- `ValidationResult(plan)`
-  - 由 `PlanValidator` 产出。
-  - 校验 context path、BO、字段、函数、表达式形状是否存在且可落地。
+- `ExprNode`
+- `ExprKind`
 - `ValuePlan`
-  - 由 value planner 从 `PlanDraft` 产出。
-  - 是最终 DSL 的中间计划对象。
-  - 核心是 `final_expr`，它是 AST/IR 风格的 `ExprNode` 树。
-- `GeneratedDSL`
-  - 由 renderer 从 `ValuePlan` 渲染得到。
-  - 里面有 `methods` 和 `value_expression`。
-  - `to_text()` 后变成真正的 `dsl_code` 文本。
-
-### 4. 输出结果层
-
-这一层负责确认最终 DSL 是否成立，并把所有中间产物打包返回。
-
 - `ValidationResult`
-  - 由最终 DSL validator 产出。
-  - 用来确认 DSL 至少满足当前实现中的基本完整性要求。
-- `StructuredExplanation`
-  - 由 explanation builder 产出。
-  - 用于说明本次 plan 使用了哪些 context、BO、function，以及最终表达式是否已规划。
+- `GenerateDSLRequest`
 - `GenerateDSLResponse`
-  - 最终输出对象。
-  - 同时携带：
-    - `success`
-    - `dsl_code`
-    - `plan_draft`
-    - `generated_dsl`
-    - `intent`
-    - `resolved_environment`
-    - `value_plan`
-    - `validation_result`
-    - `explanation`
-    - `failure_reason`
 
-## fallback 分支
+### 3.1 PlanDraft 统一结构
 
-### 作用边界
+`PlanDraft` 字段：
 
-LLMPlanner 是默认入口；`SimpleRequirementParser` 只在拿不到结构化计划时作为 fallback 使用。
+- `intent_summary: str`
+- `expression_pattern: str`
+- `context_refs: List[str]`
+- `bo_refs: List[dict]`
+- `function_refs: List[str]`
+- `semantic_slots: Dict[str, Any]`
+- `raw_plan: Dict[str, Any]`
 
-- fallback 只影响的阶段：
-  - `user_requirement -> PlanDraft`
-- 完全复用的阶段：
-  - `ResolvedEnvironment`
-  - `ValidationResult(plan)`
-  - `ValuePlan`
-  - `GeneratedDSL`
-  - `ValidationResult`
-  - `GenerateDSLResponse`
+`expression_pattern` 允许值：
 
-### 小图
+- `direct_ref`
+- `if`
+- `select_one`
+- `select`
+- `fetch_one`
+- `fetch`
+- `function_call`
 
-```mermaid
-flowchart LR
-    A[GenerateDSLRequest] --> D[PromptAssembler]
-    D --> E[OpenAIClientAdapter]
-    E --> F{PlanDraft exists?}
-    F -- Yes --> G[PlanDraft]
-    F -- No --> C[SimpleRequirementParser]
-    C --> H[Fallback intent]
-    H --> I[LLMPlanner intent_to_plan_draft]
-    I --> G
-    G --> J[Shared pipeline: plan validator -> value planner -> renderer -> validator]
+---
+
+## 4. 主链路详细说明
+
+### 4.1 EnvironmentBuilder（environment.py）
+
+输入 `GenerateDSLRequest`，输出 `Environment`：
+
+- `context_schema`
+- `bo_schema`
+- `function_schema`
+- `node_schema`
+- `context_paths`
+
+其中 `context_paths` 通过 flatten 生成，例如：
+
+- `customer.gender` → `$ctx$.customer.gender`
+- `customer.id` → `$ctx$.customer.id`
+
+### 4.2 LLMPlanner（llm_planner.py）
+
+方法：
+
+- `plan(user_requirement, node_def, env) -> PlanDraft`
+- `repair(invalid_plan, env, issues) -> Optional[PlanDraft]`
+
+职责：
+
+- 读取 prompt
+- 调用 OpenAI client（当前支持 stub）
+- 解析结构化输出为 `PlanDraft`
+
+### 4.3 PlanValidator（plan_validator.py）
+
+方法：
+
+- `validate(plan, env) -> ValidationResult`
+
+校验内容：
+
+1. context path 是否存在
+2. `expression_pattern` 是否合法
+3. BO 是否存在
+4. BO 字段是否存在
+5. function 是否存在
+6. namingSQL 参数：
+   - `value` 不为空
+   - `value_source_type` ∈ `{context, constant}`
+   - `value_source_type=context` 时引用 path 必须存在
+
+repair loop：
+
+- 最多 2 次
+- 每次失败后调用 `LLMPlanner.repair(...)`
+
+### 4.4 ASTBuilder（ast_builder.py）
+
+方法：
+
+- `build_ast(plan) -> ExprNode`
+
+支持 `ExprKind`：
+
+- `LITERAL`
+- `CONTEXT_REF`
+- `LOCAL_REF`
+- `QUERY_CALL`
+- `FUNCTION_CALL`
+- `IF_EXPR`
+- `BINARY_OP`
+- `FIELD_ACCESS`
+- `LIST_LITERAL`
+- `INDEX_ACCESS`
+
+### 4.5 DSLRenderer（dsl_renderer.py）
+
+方法：
+
+- `render(expr) -> str`
+
+示例输出：
+
+- `if($ctx$.customer.gender == "男", "MR.", "Ms.")`
+
+### 4.6 FinalValidator（agent_entry.py）
+
+用于 DSL 末端合法性校验（当前包含：
+
+- DSL 非空
+- 括号平衡
+
+最终返回 `GenerateDSLResponse`。
+
+---
+
+## 5. NamingSQL 参数约定
+
+在 `PlanDraft.bo_refs` 中约定：
+
+```json
+[
+  {
+    "bo_name": "...",
+    "query_mode": "fetch_one",
+    "params": [
+      {
+        "param_name": "...",
+        "value": "...",
+        "value_source_type": "context|constant"
+      }
+    ]
+  }
+]
 ```
 
-### fallback 分支的真实对象流
+本地 `PlanValidator` 对上述结构执行强校验；失败将进入 repair loop。
 
-1. `PromptAssembler` 从输入和 `ResolvedEnvironment` 里抽取节点信息和资源摘要，组装 `payload`。
-2. `OpenAIClientAdapter` 接收 `payload`，返回 `PlanDraft` 或 `None`。
-3. `LLMPlanner`
-   - 如果拿到 `PlanDraft`，主链路直接继续。
-   - 如果拿不到 `PlanDraft`，就 fallback 到 `SimpleRequirementParser.parse(...)`，再把结果转换成 `PlanDraft`。
-4. 一旦 `PlanDraft` 产出，后续主链路完全一致。
+---
 
-## 代码对应关系
+## 6. 测试基线
 
-- 编排主链路：[`billing_dsl_agent/services/orchestrator.py`](/D:/workspace/after_work/billing_dsl_agent/services/orchestrator.py)
-- 外层入口：[`billing_dsl_agent/services/generate_dsl_agent_service.py`](/D:/workspace/after_work/billing_dsl_agent/services/generate_dsl_agent_service.py)
-- LLM planning：[`billing_dsl_agent/services/llm_planner.py`](/D:/workspace/after_work/billing_dsl_agent/services/llm_planner.py)
-- 本地 plan 校验：[`billing_dsl_agent/services/plan_validator.py`](/D:/workspace/after_work/billing_dsl_agent/services/plan_validator.py)
-- 输入输出模型：[`billing_dsl_agent/types/request_response.py`](/D:/workspace/after_work/billing_dsl_agent/types/request_response.py)
-- 计划对象：[`billing_dsl_agent/types/agent.py`](/D:/workspace/after_work/billing_dsl_agent/types/agent.py)
-- 环境对象：[`billing_dsl_agent/types/plan.py`](/D:/workspace/after_work/billing_dsl_agent/types/plan.py)
-- 规划对象：[`billing_dsl_agent/types/dsl.py`](/D:/workspace/after_work/billing_dsl_agent/types/dsl.py)
+当前测试覆盖以下关键场景：
+
+- `test_if_expr`
+- `test_select_one`
+- `test_function_call`
+- `test_namingsql_param`
+- `test_context_ref`
+- `test_plan_validator_detect_fake_ctx`
+- `test_plan_validator_empty_param`
+- `test_repair_loop`
+
+---
+
+## 7. 已删除的冗余职责
+
+已从架构中移除 rule-based 推断链路及其冗余树状结构（意图树、绑定树、operation tree、matcher 体系等），避免本地规则猜测依赖，统一为：
+
+**LLM Planning + Strong Validation + Deterministic DSL Generation**。
