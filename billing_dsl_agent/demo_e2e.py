@@ -354,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.pretty:
-        print(response.model_dump_json(indent=2, exclude_none=True))
+        print(response.dsl)
     else:
         output = {
             "success": response.success,
