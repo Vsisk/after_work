@@ -26,14 +26,23 @@ def _sample_bos() -> list[dict]:
 def _sample_functions() -> list[dict]:
     return [
         {
+            "id": "function:Common.Double2Str",
+            "name": "Double2Str",
             "full_name": "Common.Double2Str",
             "description": "数值转两位小数字符串",
-            "params": ["number", "precision"],
+            "return_type_raw": "String",
+            "params": [
+                {"param_name": "number", "param_type_raw": "Double", "normalized_param_type": "double"},
+                {"param_name": "precision", "param_type_raw": "int", "normalized_param_type": "int"},
+            ],
         },
         {
+            "id": "function:Customer.GetSalutation",
+            "name": "GetSalutation",
             "full_name": "Customer.GetSalutation",
             "description": "根据性别返回称谓",
-            "params": ["gender"],
+            "return_type_raw": "String",
+            "params": [{"param_name": "gender", "param_type_raw": "String", "normalized_param_type": "string"}],
         },
     ]
 
@@ -132,7 +141,9 @@ def test_format_for_prompt() -> None:
     assert payload["function_candidates"]
     assert {"path", "name", "description"}.issubset(payload["context_candidates"][0].keys())
     assert {"bo_name", "description", "fields", "naming_sqls"}.issubset(payload["bo_candidates"][0].keys())
-    assert {"name", "description", "params"}.issubset(payload["function_candidates"][0].keys())
+    assert {"function_id", "function_name", "description", "normalized_return_type", "params"}.issubset(
+        payload["function_candidates"][0].keys()
+    )
 
 
 def test_normalize_functions_and_save(tmp_path) -> None:
@@ -201,4 +212,36 @@ def test_normalize_functions_and_save(tmp_path) -> None:
     assert normalized["functions"][0]["shared_object"] == "/lib/user_manager.so"
     assert normalized["functions"][1]["full_name"] == "ContractAnalyzer.analyzePaymentTerms"
     assert normalized["functions"][1]["expression_type"] == "edsl_expression"
+    assert normalized["functions"][1]["params"][0]["normalized_param_type"] == "unknown"
+    assert normalized["functions"][0]["normalized_return_type_ref"]["normalized_type"] == "unknown"
     assert output_path.exists()
+
+
+def test_normalize_functions_supports_type_alias_and_list() -> None:
+    manager = ResourceManager()
+    function_payload = {
+        "func": [
+            {
+                "class_name": "Mask",
+                "func_list": [
+                    {
+                        "func_name": "CustCallMask",
+                        "func_desc": "mask",
+                        "param_list": [
+                            {"param_name": "iBeId", "data_type": "INT"},
+                            {"param_name": "numbers", "type": "List<String>"},
+                            {"param_name": "unknownParam"},
+                        ],
+                        "return_type": "String",
+                    }
+                ],
+            }
+        ]
+    }
+    normalized = manager.normalize_functions(function_payload)
+    fn = normalized["functions"][0]
+    assert fn["params"][0]["normalized_param_type"] == "int"
+    assert fn["params"][1]["normalized_param_type"] == "list[string]"
+    assert fn["params"][1]["is_list"] is True
+    assert fn["params"][2]["normalized_param_type"] == "unknown"
+    assert fn["normalized_return_type_ref"]["normalized_type"] == "string"

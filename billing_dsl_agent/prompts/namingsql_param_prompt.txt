@@ -1,2 +1,0 @@
-Generate namingSQL params with non-empty values.
-Each param must include value_source_type in [context, constant].
