@@ -1,4 +1,6 @@
 from billing_dsl_agent.services.llm_client import (
+    BaseOpenAILLMClient,
+    LLMConfig,
     LLMClientError,
     OpenAILLMClient,
     RawLLMInvocation,
@@ -10,6 +12,8 @@ from billing_dsl_agent.services.prompt_manager import PromptManager, PromptManag
 
 __all__ = [
     "LLMClientError",
+    "LLMConfig",
+    "BaseOpenAILLMClient",
     "OpenAILLMClient",
     "RawLLMInvocation",
     "StructuredExecutionResult",

@@ -264,3 +264,77 @@ def test_openai_llm_client_structured_uses_json_schema_response_format(tmp_path:
 
     assert result.parsed is not None
     assert captured["payload"]["response_format"]["type"] == "json_schema"
+
+
+def test_openai_llm_client_uses_llm_name_config_from_env(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text('{"demo":{"zh":"需求：{{requirement}}"}}', encoding="utf-8")
+    env_path.write_text(
+        "\n".join(
+            [
+                "LLM_DEFAULT_NAME=text_default",
+                "LLM_TEXT_DEFAULT_API_KEY=test-key",
+                "LLM_TEXT_DEFAULT_BASE_URL=https://example.com/v1",
+                "LLM_TEXT_DEFAULT_MODEL=gpt-4.1-mini",
+                "LLM_TEXT_DEFAULT_CHAT_COMPLETIONS_PATH=/chat/completions",
+                "LLM_TEXT_DEFAULT_TIMEOUT=12",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, Any] = {}
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        captured["url"] = url
+        captured["payload"] = payload
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return {"choices": [{"message": {"content": '{"answer":"ok"}'}}]}
+
+    client = OpenAILLMClient(prompt_manager=PromptManager(prompt_path=prompt_path), env_path=env_path, transport=transport)
+    result = client.invoke(prompt_key="demo", lang="zh", prompt_params={"requirement": "x"})
+    assert result == {"answer": "ok"}
+    assert captured["payload"]["model"] == "gpt-4.1-mini"
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["timeout"] == 12.0
+
+
+def test_openai_llm_client_supports_multimodal_url_and_path(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    image_path = tmp_path / "demo.png"
+    prompt_path.write_text('{"demo":{"zh":"识别图像"}}', encoding="utf-8")
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+    image_path.write_bytes(b"fakepng")
+    captured: dict[str, Any] = {}
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": '{"answer":"ok"}'}}]}
+
+    client = OpenAILLMClient(prompt_manager=PromptManager(prompt_path=prompt_path), env_path=env_path, transport=transport)
+    result = client.invoke_multimodal(
+        prompt_key="demo",
+        lang="zh",
+        image_urls=["https://example.com/a.png"],
+        image_paths=[str(image_path)],
+    )
+    assert result == {"answer": "ok"}
+    content = captured["payload"]["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert content[1]["image_url"]["url"] == "https://example.com/a.png"
+    assert content[2]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_openai_llm_client_multimodal_requires_images(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text('{"demo":{"zh":"识别图像"}}', encoding="utf-8")
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+    client = OpenAILLMClient(prompt_manager=PromptManager(prompt_path=prompt_path), env_path=env_path)
+    try:
+        client.invoke_multimodal(prompt_key="demo", lang="zh")
+        assert False, "should raise"
+    except Exception as exc:
+        assert "invalid_image_input" in str(exc)

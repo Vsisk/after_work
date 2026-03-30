@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import mimetypes
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Generic, Mapping, TypeVar
@@ -61,6 +64,72 @@ class StructuredExecutionResult(Generic[ModelT]):
     attempt: LLMAttemptRecord
     raw_text: str = ""
     raw_payload: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class LLMConfig:
+    name: str
+    model: str
+    api_key: str
+    base_url: str
+    chat_completions_path: str
+    timeout: float
+
+
+class BaseOpenAILLMClient(ABC):
+    env_path: Path
+    api_key: str | None
+    base_url: str | None
+    model: str | None
+    timeout: float
+
+    @abstractmethod
+    def _load_env(self) -> dict[str, str]:
+        raise NotImplementedError
+
+    def resolve_config(self, llm_name: str | None = None) -> LLMConfig:
+        env = self._load_env()
+        effective_name = llm_name or os.getenv("LLM_DEFAULT_NAME") or env.get("LLM_DEFAULT_NAME") or "default"
+        normalized_name = effective_name.upper().replace("-", "_")
+        model = self.model or os.getenv(f"LLM_{normalized_name}_MODEL") or env.get(f"LLM_{normalized_name}_MODEL")
+        if not model:
+            model = os.getenv("OPENAI_MODEL") or env.get("OPENAI_MODEL") or "gpt-4o-mini"
+
+        api_key = self.api_key or os.getenv(f"LLM_{normalized_name}_API_KEY") or env.get(f"LLM_{normalized_name}_API_KEY")
+        if not api_key:
+            api_key = os.getenv("OPENAI_API_KEY") or env.get("OPENAI_API_KEY")
+        if not api_key:
+            raise LLMClientError(f"llm config not found for name={effective_name!r}: api key is missing")
+
+        base_url = self.base_url or os.getenv(f"LLM_{normalized_name}_BASE_URL") or env.get(f"LLM_{normalized_name}_BASE_URL")
+        if not base_url:
+            base_url = os.getenv("OPENAI_BASE_URL") or env.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+
+        path = os.getenv(f"LLM_{normalized_name}_CHAT_COMPLETIONS_PATH") or env.get(
+            f"LLM_{normalized_name}_CHAT_COMPLETIONS_PATH"
+        )
+        if not path:
+            path = os.getenv("OPENAI_CHAT_COMPLETIONS_PATH") or env.get("OPENAI_CHAT_COMPLETIONS_PATH") or "/chat/completions"
+
+        timeout_raw = os.getenv(f"LLM_{normalized_name}_TIMEOUT") or env.get(f"LLM_{normalized_name}_TIMEOUT")
+        if not timeout_raw:
+            timeout_raw = os.getenv("OPENAI_TIMEOUT") or env.get("OPENAI_TIMEOUT")
+        if timeout_raw:
+            try:
+                timeout = float(timeout_raw)
+            except ValueError:
+                raise LLMClientError(f"timeout for llm {effective_name!r} must be a number") from None
+        else:
+            timeout = self.timeout
+
+        return LLMConfig(
+            name=effective_name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            chat_completions_path=path,
+            timeout=timeout,
+        )
 
 
 def _load_env_file(env_path: Path) -> dict[str, str]:
@@ -133,7 +202,7 @@ def _default_transport(
 
 
 @dataclass(slots=True)
-class OpenAILLMClient:
+class OpenAILLMClient(BaseOpenAILLMClient):
     prompt_manager: PromptManager = field(default_factory=PromptManager)
     env_path: Path = _DEFAULT_ENV_PATH
     api_key: str | None = None
@@ -148,6 +217,7 @@ class OpenAILLMClient:
         lang: str,
         prompt_params: Mapping[str, Any] | None = None,
         response_format: Mapping[str, Any] | str | None = None,
+        llm_name: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         raw_invocation = self.invoke_raw(
@@ -155,6 +225,7 @@ class OpenAILLMClient:
             lang=lang,
             prompt_params=prompt_params,
             response_format=response_format,
+            llm_name=llm_name,
             **kwargs,
         )
         return post_process_response(raw_invocation.response_payload)
@@ -166,22 +237,69 @@ class OpenAILLMClient:
         lang: str,
         prompt_params: Mapping[str, Any] | None = None,
         response_format: Mapping[str, Any] | str | None = None,
+        llm_name: str | None = None,
         **kwargs: Any,
     ) -> RawLLMInvocation:
+        config = self.resolve_config(llm_name=llm_name)
         prompt = self.prompt_manager.render_prompt(prompt_key, lang, prompt_params)
-        payload = self._build_payload(prompt=prompt, response_format=response_format, extra_params=kwargs)
-        request_url = self._resolve_request_url()
+        payload = self._build_payload(prompt=prompt, response_format=response_format, extra_params=kwargs, model=config.model)
+        request_url = self._resolve_request_url(config)
         raw_response = self.transport(
             request_url,
             payload,
-            self._build_headers(),
-            self._resolve_timeout(),
+            self._build_headers(config),
+            config.timeout,
         )
         return RawLLMInvocation(
             request_url=request_url,
             request_payload=payload,
             response_payload=raw_response,
         )
+
+    def invoke_multimodal(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        image_urls: list[str] | None = None,
+        image_paths: list[str] | None = None,
+        llm_name: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        raw = self.invoke_multimodal_raw(
+            prompt_key=prompt_key,
+            lang=lang,
+            prompt_params=prompt_params,
+            image_urls=image_urls,
+            image_paths=image_paths,
+            llm_name=llm_name,
+            **kwargs,
+        )
+        return post_process_response(raw.response_payload)
+
+    def invoke_multimodal_raw(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        image_urls: list[str] | None = None,
+        image_paths: list[str] | None = None,
+        llm_name: str | None = None,
+        **kwargs: Any,
+    ) -> RawLLMInvocation:
+        config = self.resolve_config(llm_name=llm_name)
+        prompt = self.prompt_manager.render_prompt(prompt_key, lang, prompt_params)
+        content = self._build_multimodal_content(prompt=prompt, image_urls=image_urls, image_paths=image_paths)
+        payload = {"model": config.model, "messages": [{"role": "user", "content": content}]}
+        payload.update(extract_param(kwargs))
+        request_url = self._resolve_request_url(config)
+        raw_response = self.transport(
+            request_url,
+            payload,
+            self._build_headers(config),
+            config.timeout,
+        )
+        return RawLLMInvocation(request_url=request_url, request_payload=payload, response_payload=raw_response)
 
     def execute_structured(
         self,
@@ -193,6 +311,7 @@ class OpenAILLMClient:
         stage: str,
         attempt_index: int = 1,
         response_parser: Callable[[dict[str, Any]], ModelT] | None = None,
+        llm_name: str | None = None,
         **kwargs: Any,
     ) -> StructuredExecutionResult[ModelT]:
         request_payload: dict[str, Any] | None = None
@@ -207,6 +326,7 @@ class OpenAILLMClient:
                 lang=lang,
                 prompt_params=prompt_params,
                 response_format=response_format,
+                llm_name=llm_name,
                 **kwargs,
             )
             request_payload = self._as_dict(getattr(raw_invocation, "request_payload", None))
@@ -319,48 +439,61 @@ class OpenAILLMClient:
         prompt: str,
         response_format: Mapping[str, Any] | str | None,
         extra_params: Mapping[str, Any],
+        model: str,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self._resolve_model(),
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "response_format": _normalize_response_format(response_format),
         }
         payload.update(extract_param(extra_params))
         return payload
 
-    def _resolve_request_url(self) -> str:
-        base_url = self.base_url or os.getenv("OPENAI_BASE_URL") or self._load_env().get("OPENAI_BASE_URL")
-        normalized_base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
-        path = os.getenv("OPENAI_CHAT_COMPLETIONS_PATH") or self._load_env().get("OPENAI_CHAT_COMPLETIONS_PATH")
-        normalized_path = path or "/chat/completions"
+    def _resolve_request_url(self, config: LLMConfig) -> str:
+        normalized_base_url = config.base_url.rstrip("/")
+        normalized_path = config.chat_completions_path or "/chat/completions"
         if not normalized_path.startswith("/"):
             normalized_path = f"/{normalized_path}"
         return f"{normalized_base_url}{normalized_path}"
 
-    def _build_headers(self) -> dict[str, str]:
-        api_key = self.api_key or os.getenv("OPENAI_API_KEY") or self._load_env().get("OPENAI_API_KEY")
-        if not api_key:
-            raise LLMClientError("OPENAI_API_KEY is not configured in environment or .env")
+    def _build_headers(self, config: LLMConfig) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
         }
 
-    def _resolve_model(self) -> str:
-        model = self.model or os.getenv("OPENAI_MODEL") or self._load_env().get("OPENAI_MODEL")
-        return model or "gpt-4o-mini"
-
-    def _resolve_timeout(self) -> float:
-        timeout = os.getenv("OPENAI_TIMEOUT") or self._load_env().get("OPENAI_TIMEOUT")
-        if timeout:
-            try:
-                return float(timeout)
-            except ValueError:
-                raise LLMClientError("OPENAI_TIMEOUT must be a number") from None
-        return self.timeout
-
     def _load_env(self) -> dict[str, str]:
         return _load_env_file(self.env_path)
+
+    def _image_path_to_data_url(self, image_path: str) -> str:
+        path = Path(image_path)
+        if not path.exists():
+            raise LLMClientError(f"image path not found: {image_path}")
+        mime_type, _ = mimetypes.guess_type(path.name)
+        if not mime_type:
+            mime_type = "application/octet-stream"
+        binary = path.read_bytes()
+        encoded = base64.b64encode(binary).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    def _build_multimodal_content(
+        self,
+        *,
+        prompt: str,
+        image_urls: list[str] | None,
+        image_paths: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        urls = [item for item in (image_urls or []) if item]
+        paths = [item for item in (image_paths or []) if item]
+        if not urls and not paths:
+            raise LLMClientError("invalid_image_input: image_urls or image_paths is required for multimodal call")
+
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for url in urls:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        for path in paths:
+            content.append({"type": "image_url", "image_url": {"url": self._image_path_to_data_url(path)}})
+        return content
 
     def _build_response_format(self, response_model: type[BaseModel] | None) -> dict[str, Any]:
         if response_model is None:
