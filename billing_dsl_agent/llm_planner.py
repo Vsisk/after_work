@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from pydantic import BaseModel, ConfigDict
+
 from billing_dsl_agent.models import (
     FilteredEnvironment,
     LLMAttemptRecord,
@@ -16,6 +18,15 @@ from billing_dsl_agent.models import (
 )
 from billing_dsl_agent.plan_validator import parse_program_plan_payload
 from billing_dsl_agent.services.llm_client import OpenAILLMClient, StructuredExecutionResult
+
+
+class PlannerSkeletonPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class PlannerDetailPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
 
 
 @dataclass(slots=True)
@@ -224,7 +235,7 @@ class LLMPlanner:
                     ensure_ascii=False,
                 )
             },
-            response_model=None,
+            response_model=PlannerSkeletonPayload,
             response_parser=self._parse_skeleton_payload,
             stage="plan_skeleton",
             attempt_index=1,
@@ -260,7 +271,7 @@ class LLMPlanner:
                 "skeleton": self._skeleton_to_dict(skeleton),
                 "environment": detail_env,
             },
-            response_model=ProgramPlan,
+            response_model=PlannerDetailPayload,
             response_parser=self._parse_detail_payload,
             stage="plan_detail",
             attempt_index=1,
