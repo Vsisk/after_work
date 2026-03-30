@@ -1,4 +1,4 @@
-from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
+from billing_dsl_agent.llm_planner import LLMPlanner, PlannerSkeleton, StubOpenAIClient
 from billing_dsl_agent.models import (
     BOResource,
     ContextResource,
@@ -76,24 +76,41 @@ def _node() -> NodeDef:
 
 def test_llm_planner_returns_program_plan() -> None:
     client = StubOpenAIClient(
-        plan_response={
-            "definitions": [
-                {
-                    "kind": "variable",
-                    "name": "customer_gender",
-                    "expr": {"type": "context_ref", "path": "$ctx$.customer.gender"},
-                }
-            ],
-            "return_expr": {"type": "var_ref", "name": "customer_gender"},
+        stage_responses={
+            "plan_skeleton": {
+                "expression_pattern": "function_call",
+                "require_context": True,
+                "require_bo": False,
+                "require_function": True,
+                "require_local_context": False,
+                "require_global_context": True,
+                "require_namingsql": False,
+                "require_binding": True,
+                "notes": "function call expected",
+            },
+            "plan_detail": {
+                "definitions": [
+                    {
+                        "kind": "variable",
+                        "name": "customer_gender",
+                        "expr": {"type": "context_ref", "path": "$ctx$.customer.gender"},
+                    }
+                ],
+                "return_expr": {
+                    "type": "function_call",
+                    "function_id": "Customer.GetSalutation",
+                    "args": [{"type": "var_ref", "name": "customer_gender"}],
+                },
+            },
         }
     )
     planner = LLMPlanner(client)
     plan = planner.plan("generate title", _node(), _env())
     assert plan.definitions[0].name == "customer_gender"
-    assert plan.return_expr.type == "var_ref"
-    assert client.last_payload is not None
-    assert client.last_payload["environment"]["selected_function_ids"] == ["function:Customer.GetSalutation"]
-    assert client.last_payload["environment"]["selected_functions"][0]["resource_id"] == "function:Customer.GetSalutation"
+    assert plan.return_expr.type == "function_call"
+    assert len(planner.plan_attempts) == 2
+    assert planner.plan_attempts[0].stage == "plan_skeleton"
+    assert planner.plan_attempts[1].stage == "plan_detail"
 
 
 def test_llm_planner_adapts_legacy_payload() -> None:
@@ -115,9 +132,22 @@ def test_llm_planner_adapts_legacy_payload() -> None:
 
 def test_llm_planner_repair_payload_contains_structured_issues() -> None:
     client = StubOpenAIClient(
-        plan_response={
-            "definitions": [],
-            "return_expr": {"type": "literal", "value": "ok"},
+        stage_responses={
+            "plan_skeleton": {
+                "expression_pattern": "literal",
+                "require_context": False,
+                "require_bo": False,
+                "require_function": False,
+                "require_local_context": False,
+                "require_global_context": False,
+                "require_namingsql": False,
+                "require_binding": False,
+                "notes": "literal",
+            },
+            "plan_detail": {
+                "definitions": [],
+                "return_expr": {"type": "literal", "value": "ok"},
+            },
         },
         repair_response={
             "definitions": [],
@@ -134,3 +164,64 @@ def test_llm_planner_repair_payload_contains_structured_issues() -> None:
     assert repaired is not None
     assert client.last_payload is not None
     assert client.last_payload["issues"][0]["code"] == "undefined_var_ref"
+
+
+def test_detail_stage_trims_resources_by_skeleton_requirements() -> None:
+    client = StubOpenAIClient(
+        stage_responses={
+            "plan_skeleton": {
+                "expression_pattern": "literal",
+                "require_context": False,
+                "require_bo": False,
+                "require_function": False,
+                "require_local_context": False,
+                "require_global_context": False,
+                "require_namingsql": False,
+                "require_binding": False,
+                "notes": "literal",
+            },
+            "plan_detail": {
+                "definitions": [],
+                "return_expr": {"type": "literal", "value": "ok"},
+            },
+        }
+    )
+    planner = LLMPlanner(client)
+    planner.plan("return literal", _node(), _env())
+    assert client.last_payload is not None
+    assert client.last_payload["environment"]["selected_global_contexts"] == []
+    assert client.last_payload["environment"]["selected_bos"] == []
+    assert client.last_payload["environment"]["selected_functions"] == []
+
+
+def test_skeleton_parser_infers_flags_from_program_plan_payload() -> None:
+    planner = LLMPlanner(StubOpenAIClient())
+    skeleton = planner._parse_skeleton_payload(
+        {
+            "definitions": [],
+            "return_expr": {
+                "type": "function_call",
+                "function_id": "Customer.GetSalutation",
+                "args": [{"type": "context_ref", "path": "$ctx$.customer.gender"}],
+            },
+        }
+    )
+    assert isinstance(skeleton, PlannerSkeleton)
+    assert skeleton.require_function is True
+    assert skeleton.require_global_context is True
+
+
+def test_planner_falls_back_to_legacy_plan_when_stages_fail() -> None:
+    planner = LLMPlanner(
+        StubOpenAIClient(
+            stage_responses={"plan_skeleton": {"bad": "payload"}},
+            plan_response={
+                "definitions": [],
+                "return_expr": {"type": "literal", "value": "legacy"},
+            },
+        )
+    )
+    plan = planner.plan("legacy fallback", _node(), _env())
+    assert plan.return_expr.type == "literal"
+    assert len(planner.plan_attempts) == 2
+    assert planner.plan_attempts[-1].stage == "plan"

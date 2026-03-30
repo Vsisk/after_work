@@ -1,6 +1,6 @@
 {
   "default_code_task": {
-    "zh": "\u4f60\u662f\u4e00\u4e2a\u8d44\u6df1\u8f6f\u4ef6\u5de5\u7a0b\u5e08\u3002\u8bf7\u6839\u636e\u4ee5\u4e0b\u4fe1\u606f\u5b8c\u6210\u4efb\u52a1\uff0c\u5e76\u4e25\u683c\u8f93\u51fa JSON \u5bf9\u8c61\u3002\n\u4efb\u52a1\u7c7b\u578b\uff1a{{task_type}}\n\u9700\u6c42\uff1a{{requirement}}\n\u4e0a\u4e0b\u6587\uff1a{{context}}",
+    "zh": "你是一个资深软件工程师。请根据以下信息完成任务，并严格输出 JSON 对象。\n任务类型：{{task_type}}\n需求：{{requirement}}\n上下文：{{context}}",
     "en": "You are a senior software engineer. Complete the following task and return a JSON object only.\nTask type: {{task_type}}\nRequirement: {{requirement}}\nContext: {{context}}"
   },
   "dsl_plan_prompt": {
@@ -18,5 +18,13 @@
   "semantic_selector_prompt": {
     "zh": "你是资源语义筛选器。只输出 JSON 对象：{\"resource_id_list\":[...]}\n\n任务类型：{{task_type}}\n用户需求：{{user_query}}\n节点信息(JSON)：{{node_def_json}}\n候选资源(JSON)：{{candidate_list_json}}\n最多返回数量：{{max_items}}\n\n规则：\n- 只能返回候选资源中已有的 resource_id。\n- 只做语义相关性排序，不要猜测新资源。\n- 如果多个资源都相关，按相关性从高到低排序。\n- 不要输出解释文字。\n\n只返回 {\"resource_id_list\":[...]}。",
     "en": "You are a resource semantic selector. Return JSON only in the form {\"resource_id_list\":[...]}.\n\nTask type: {{task_type}}\nUser request: {{user_query}}\nNode info (JSON): {{node_def_json}}\nCandidate resources (JSON): {{candidate_list_json}}\nMaximum items: {{max_items}}\n\nRules:\n- Return only resource_id values that already exist in the candidate list.\n- Perform semantic relevance ranking only; do not invent new resources.\n- If multiple candidates are relevant, sort by descending relevance.\n- Do not output explanations.\n\nReturn {\"resource_id_list\":[...]} only."
+  },
+  "dsl_plan_skeleton_prompt": {
+    "zh": "你是 DSL skeleton planner。只输出 JSON。\n\n规划上下文(JSON)：{{planner_context_json}}\n\n只做高层规划，不要输出完整 ProgramPlan。\n输出字段：\n- expression_pattern\n- require_context\n- require_bo\n- require_function\n- require_local_context\n- require_global_context\n- require_namingsql\n- require_binding\n- notes\n\n规则：\n- 基于用户需求与资源摘要判断，不要虚构资源。\n- 字段必须全部给出，布尔字段仅返回 true/false。\n- 只返回 JSON。",
+    "en": "You are a DSL skeleton planner. Return JSON only.\n\nPlanner context (JSON): {{planner_context_json}}\n\nProduce high-level planning only, not a full ProgramPlan.\nRequired output fields:\n- expression_pattern\n- require_context\n- require_bo\n- require_function\n- require_local_context\n- require_global_context\n- require_namingsql\n- require_binding\n- notes\n\nRules:\n- Decide from user intent + resource summaries only, do not invent resources.\n- Include all fields; boolean fields must be true/false.\n- Return JSON only."
+  },
+  "dsl_plan_detail_prompt": {
+    "zh": "你是 DSL detail planner。只输出 JSON，对齐 skeleton 并生成可解析 ProgramPlan。\n\n用户需求：{{user_requirement}}\n节点定义(JSON)：{{node_def_json}}\nSkeleton(JSON)：{{skeleton_json}}\n裁剪后环境(JSON)：{{environment_json}}\n\n规则：\n- 必须遵守 skeleton 约束。\n- 只能引用 environment_json 中提供的资源。\n- 输出可以是 ProgramPlan JSON，或 {selected_* + plan} 结构；其中 plan 必须可被 ProgramPlan 解析。\n- 不要输出解释文本。",
+    "en": "You are a DSL detail planner. Return JSON only. Follow the skeleton and produce a ProgramPlan-compatible result.\n\nUser requirement: {{user_requirement}}\nNode definition (JSON): {{node_def_json}}\nSkeleton (JSON): {{skeleton_json}}\nTrimmed environment (JSON): {{environment_json}}\n\nRules:\n- Must obey skeleton constraints.\n- Only reference resources provided in environment_json.\n- Output may be ProgramPlan JSON directly, or {selected_* + plan}; if using plan it must be ProgramPlan-parseable.\n- Do not output prose."
   }
 }
