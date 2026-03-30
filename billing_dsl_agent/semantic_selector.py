@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Protocol
+from typing import Any, Dict, Iterable, List
 
 from billing_dsl_agent.models import LLMErrorRecord, NodeDef, ResourceSelectionOutput
-from billing_dsl_agent.services.prompt_manager import PromptManager
-from billing_dsl_agent.services.structured_llm_executor import StructuredLLMExecutor
+from billing_dsl_agent.services.llm_client import OpenAILLMClient
 
 
 @dataclass(slots=True)
@@ -37,11 +36,6 @@ class SemanticSelector:
         raise NotImplementedError
 
 
-class OpenAISelectorClient(Protocol):
-    def create_plan(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        ...
-
-
 @dataclass(slots=True)
 class SelectionResult:
     selected_ids: List[str]
@@ -52,8 +46,7 @@ class SelectionResult:
 
 @dataclass(slots=True)
 class OpenAISemanticSelector(SemanticSelector):
-    client: OpenAISelectorClient
-    prompt_manager: PromptManager = field(default_factory=PromptManager)
+    client: OpenAILLMClient | Any
     prompt_lang: str = "zh"
     prompt_key: str = "semantic_selector_prompt"
     default_top_k: int = 5
@@ -72,11 +65,6 @@ class OpenAISemanticSelector(SemanticSelector):
         allowed = {item.resource_id for item in candidates}
         fallback_ids = [item.resource_id for item in candidates[: self.default_top_k]]
         candidate_ids = [item.resource_id for item in candidates]
-        executor = StructuredLLMExecutor(
-            client=self.client,
-            prompt_manager=self.prompt_manager,
-            default_lang=self.prompt_lang,
-        )
         prompt_params = {
             "task_type": task_type,
             "user_query": user_query,
@@ -102,7 +90,7 @@ class OpenAISemanticSelector(SemanticSelector):
             ),
             "max_items": self.default_top_k,
         }
-        execution = executor.execute(
+        execution = self.client.execute_structured(
             prompt_key=self.prompt_key,
             lang=self.prompt_lang,
             prompt_params=prompt_params,

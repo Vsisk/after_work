@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional
 
 from billing_dsl_agent.models import (
     FilteredEnvironment,
@@ -15,13 +15,7 @@ from billing_dsl_agent.models import (
     ValidationIssue,
 )
 from billing_dsl_agent.plan_validator import parse_program_plan_payload
-from billing_dsl_agent.services.prompt_manager import PromptManager
-from billing_dsl_agent.services.structured_llm_executor import StructuredLLMExecutor
-
-
-class OpenAIClient(Protocol):
-    def create_plan(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        ...
+from billing_dsl_agent.services.llm_client import OpenAILLMClient, StructuredExecutionResult
 
 
 @dataclass(slots=True)
@@ -30,28 +24,48 @@ class StubOpenAIClient:
     repair_response: Optional[Dict[str, Any]] = None
     last_payload: Optional[Dict[str, Any]] = None
 
-    def create_plan(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def execute_structured(
+        self,
+        *,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Dict[str, Any] | None,
+        response_model: Any,
+        stage: str,
+        attempt_index: int = 1,
+        response_parser: Any = None,
+        **kwargs: Any,
+    ) -> StructuredExecutionResult[ProgramPlan]:
+        payload = dict(prompt_params or {})
         self.last_payload = payload
-        if payload.get("mode") == "repair":
-            return self.repair_response
-        return self.plan_response
+        raw_response = self.repair_response if stage == "repair" else self.plan_response
+        parsed = response_parser(raw_response) if raw_response is not None and response_parser is not None else None
+        return StructuredExecutionResult(
+            parsed=parsed,
+            errors=[],
+            raw_payload=raw_response,
+            attempt=LLMAttemptRecord(
+                stage=stage,
+                attempt_index=attempt_index,
+                request_payload=payload,
+                response_payload=raw_response,
+                parsed_ok=parsed is not None,
+                errors=[],
+            ),
+        )
 
 
 class LLMPlanner:
     def __init__(
         self,
-        client: OpenAIClient,
-        prompt_manager: Optional[PromptManager] = None,
+        client: OpenAILLMClient | StubOpenAIClient,
+        prompt_manager: Optional[Any] = None,
         prompt_lang: str = "en",
     ):
         self.client = client
-        self.prompt_manager = prompt_manager or PromptManager()
         self.prompt_lang = prompt_lang
-        self.executor = StructuredLLMExecutor(
-            client=self.client,
-            prompt_manager=self.prompt_manager,
-            default_lang=self.prompt_lang,
-        )
+        if prompt_manager is not None and hasattr(self.client, "prompt_manager"):
+            self.client.prompt_manager = prompt_manager
         self.plan_attempts: list[LLMAttemptRecord] = []
         self.repair_attempts: list[LLMAttemptRecord] = []
         self.llm_errors: list[LLMErrorRecord] = []
@@ -70,7 +84,7 @@ class LLMPlanner:
             "is_ab": node_def.is_ab,
             "ab_data_sources": list(node_def.ab_data_sources),
         }
-        execution = self.executor.execute(
+        execution = self.client.execute_structured(
             prompt_key="dsl_plan_prompt",
             lang=self.prompt_lang,
             prompt_params={
@@ -105,7 +119,7 @@ class LLMPlanner:
         invalid_plan_payload = invalid_plan.raw_plan or invalid_plan.model_dump(mode="python")
         issues_payload = [item.model_dump(mode="python") for item in issues]
         prior_errors_payload = [item.model_dump(mode="python") for item in self.llm_errors]
-        execution = self.executor.execute(
+        execution = self.client.execute_structured(
             prompt_key="dsl_repair_prompt",
             lang=self.prompt_lang,
             prompt_params={
