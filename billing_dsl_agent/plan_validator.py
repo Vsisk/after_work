@@ -856,6 +856,14 @@ def _child_expressions(node: ExprPlanNode) -> list[ExprPlanNode]:
 
 
 def _resolve_context_id(ref: str, env: FilteredEnvironment, allowed_ids: set[str] | None = None) -> str | None:
+    local_set = env.visible_local_context
+    if ref in local_set.nodes_by_id and (allowed_ids is None or ref in allowed_ids):
+        return ref
+    local_by_name = local_set.nodes_by_property_name.get(ref.removeprefix("$local$."))
+    if local_by_name is not None and local_by_name.access_path == ref:
+        if allowed_ids is None or local_by_name.resource_id in allowed_ids:
+            return local_by_name.resource_id
+
     registry = env.registry
     if ref in registry.contexts:
         if allowed_ids is None or ref in allowed_ids:

@@ -3,9 +3,11 @@ from billing_dsl_agent.models import (
     ContextResource,
     FilteredEnvironment,
     FunctionResource,
+    NormalizedLocalContextNode,
     ProgramPlan,
     ProgramPlanLimits,
     ResourceRegistry,
+    VisibleLocalContextSet,
 )
 from billing_dsl_agent.plan_validator import PlanValidator, validate_program_plan_structure
 
@@ -24,12 +26,6 @@ def _env() -> FilteredEnvironment:
                 name="gender",
                 path="$ctx$.customer.gender",
                 scope="global",
-            ),
-            "local:$local$.invoiceId": ContextResource(
-                resource_id="local:$local$.invoiceId",
-                name="invoiceId",
-                path="$local$.invoiceId",
-                scope="local",
             ),
         },
         bos={
@@ -62,9 +58,35 @@ def _env() -> FilteredEnvironment:
             "context:$ctx$.customer.id",
             "context:$ctx$.customer.gender",
         ],
-        selected_local_context_ids=["local:$local$.invoiceId"],
+        selected_local_context_ids=["local_context:lc_invoice_id"],
         selected_bo_ids=["bo:CustomerBO"],
         selected_function_ids=["function:Customer.GetSalutation"],
+        visible_local_context=VisibleLocalContextSet(
+            nodes_by_id={
+                "local_context:lc_invoice_id": NormalizedLocalContextNode(
+                    resource_id="local_context:lc_invoice_id",
+                    property_id="lc_invoice_id",
+                    property_name="invoiceId",
+                    access_path="$local$.invoiceId",
+                )
+            },
+            nodes_by_property_name={
+                "invoiceId": NormalizedLocalContextNode(
+                    resource_id="local_context:lc_invoice_id",
+                    property_id="lc_invoice_id",
+                    property_name="invoiceId",
+                    access_path="$local$.invoiceId",
+                )
+            },
+            ordered_nodes=[
+                NormalizedLocalContextNode(
+                    resource_id="local_context:lc_invoice_id",
+                    property_id="lc_invoice_id",
+                    property_name="invoiceId",
+                    access_path="$local$.invoiceId",
+                )
+            ],
+        ),
     )
 
 

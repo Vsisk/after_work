@@ -145,7 +145,7 @@ def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> Genera
         project_id="proj-1",
         node_def=NodeDef(
             node_id="n1",
-            node_path="invoice.customer.title",
+            node_path="$.children[0].children[0]",
             node_name="title",
             description="customer title",
             is_ab=is_ab,
@@ -193,15 +193,14 @@ def test_loader_normalization_and_filtering_pipeline() -> None:
 
 def test_local_context_inherits_from_edsl_ancestors() -> None:
     filtered = _build_filtered_env()
-    local_resources = {cid: filtered.registry.contexts[cid] for cid in filtered.selected_local_context_ids}
-    names = {item.name for item in local_resources.values()}
+    names = {item.property_name for item in filtered.visible_local_context.ordered_nodes}
     assert "invoiceId" in names
     assert "customerLevel" in names
 
 
 def test_only_parent_or_parent_list_provide_local_context() -> None:
     filtered = _build_filtered_env()
-    names = {filtered.registry.contexts[cid].name for cid in filtered.selected_local_context_ids}
+    names = {item.property_name for item in filtered.visible_local_context.ordered_nodes}
     assert "should_not_visible" not in names
 
 

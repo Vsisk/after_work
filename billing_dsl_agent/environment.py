@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from billing_dsl_agent.context_selector import ContextSelector
+from billing_dsl_agent.local_context_normalizer import normalize_local_contexts
+from billing_dsl_agent.local_context_resolver import resolve_visible_local_contexts
 from billing_dsl_agent.models import (
     BOResource,
     ContextResource,
@@ -31,12 +32,9 @@ class EnvironmentBuilder:
             edsl_tree=dict(registry.edsl_tree),
         )
 
-        context_selector = ContextSelector(semantic_selector=self.semantic_selector)
-        local_contexts = context_selector.resolve_local_context_from_edsl_tree(node_info.node_path, working_registry.edsl_tree)
-        working_registry.contexts.update(local_contexts)
-
-        local_context_ids = sorted(local_contexts.keys())
-        selected_local_contexts = [working_registry.contexts[item] for item in local_context_ids if item in working_registry.contexts]
+        resolved_local_contexts = resolve_visible_local_contexts(working_registry.edsl_tree, node_info.node_path)
+        visible_local_context = normalize_local_contexts(resolved_local_contexts)
+        local_context_ids = [item.resource_id for item in visible_local_context.ordered_nodes]
         local_debug = ResourceSelectionDebug(
             resource_type="local_context",
             strategy="rule_only",
@@ -102,7 +100,7 @@ class EnvironmentBuilder:
             selected_bo_ids=[item.resource_id for item in selected_bos],
             selected_function_ids=[item.resource_id for item in selected_functions],
             selected_global_contexts=selected_global_contexts,
-            selected_local_contexts=selected_local_contexts,
+            visible_local_context=visible_local_context,
             selected_bos=selected_bos,
             selected_functions=selected_functions,
             selection_debug=selection_debug,
