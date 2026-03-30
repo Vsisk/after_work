@@ -1,0 +1,196 @@
+{
+  "site_id": "demo-site",
+  "project_id": "demo-project",
+  "payload": {
+    "context": {
+      "global_context": {
+        "property_id": "root",
+        "property_name": "root",
+        "value_source_type": "sub_property_wise",
+        "sub_properties": [
+          {
+            "property_id": "customer",
+            "property_name": "customer",
+            "annotation": "customer object",
+            "value_source_type": "sub_property_wise",
+            "sub_properties": [
+              {
+                "property_id": "customer_id",
+                "property_name": "id",
+                "annotation": "customer id",
+                "value_source_type": "cdsl"
+              },
+              {
+                "property_id": "customer_gender",
+                "property_name": "gender",
+                "annotation": "customer gender",
+                "value_source_type": "cdsl"
+              },
+              {
+                "property_id": "customer_name",
+                "property_name": "name",
+                "annotation": "customer display name",
+                "value_source_type": "cdsl"
+              }
+            ]
+          },
+          {
+            "property_id": "billing",
+            "property_name": "billing",
+            "annotation": "billing information",
+            "value_source_type": "sub_property_wise",
+            "sub_properties": [
+              {
+                "property_id": "billing_cycle",
+                "property_name": "cycleCode",
+                "annotation": "billing cycle code",
+                "value_source_type": "cdsl"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "edsl": {
+      "node_name": "invoice",
+      "node_type": "parent",
+      "local_context": [
+        {
+          "id": "local:invoiceId",
+          "name": "invoiceId",
+          "description": "invoice id",
+          "path": "$local$.invoiceId"
+        }
+      ],
+      "children": [
+        {
+          "node_name": "customer",
+          "node_type": "parent list",
+          "local_context": [
+            {
+              "id": "local:customerLevel",
+              "name": "customerLevel",
+              "description": "customer level",
+              "path": "$local$.customerLevel"
+            }
+          ],
+          "children": [
+            {
+              "node_name": "title",
+              "node_type": "leaf"
+            }
+          ]
+        }
+      ]
+    },
+    "bo": {
+      "sys_bo_list": [
+        {
+          "bo_name": "CustomerBO",
+          "bo_desc": "customer data",
+          "property_list": [
+            {
+              "field_name": "id"
+            },
+            {
+              "field_name": "gender"
+            },
+            {
+              "field_name": "name"
+            }
+          ],
+          "or_mapping_list": [
+            {
+              "or_mapping_data_source": "crm",
+              "naming_sql_list": [
+                {
+                  "naming_sql_id": "get_customer_by_id_001",
+                  "sql_name": "findById",
+                  "param_list": [
+                    {
+                      "param_name": "id"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "custom_bo_list": [
+        {
+          "bo_name": "InvoiceBO",
+          "bo_desc": "invoice data",
+          "property_list": [
+            {
+              "field_name": "title"
+            },
+            {
+              "field_name": "invoiceId"
+            }
+          ],
+          "or_mapping_list": [
+            {
+              "or_mapping_data_source": "billing",
+              "naming_sql_list": [
+                {
+                  "naming_sql_id": "find_invoice_by_id_001",
+                  "sql_name": "findByInvoiceId",
+                  "param_list": [
+                    {
+                      "param_name": "invoiceId"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "function": {
+      "func": [
+        {
+          "class_name": "Customer",
+          "func_list": [
+            {
+              "func_id": "Customer.GetSalutation",
+              "func_name": "GetSalutation",
+              "func_desc": "return salutation by gender",
+              "param_list": [
+                {
+                  "param_name": "gender",
+                  "type": "String"
+                }
+              ],
+              "return_type": {
+                "data_type_name": "string"
+              }
+            }
+          ]
+        }
+      ],
+      "native_func": [
+        {
+          "class_name": "String",
+          "func_list": [
+            {
+              "func_id": "String.Upper",
+              "func_name": "Upper",
+              "func_desc": "uppercase string",
+              "param_list": [
+                {
+                  "param_name": "value",
+                  "type": "String"
+                }
+              ],
+              "return_type": {
+                "data_type_name": "string"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
