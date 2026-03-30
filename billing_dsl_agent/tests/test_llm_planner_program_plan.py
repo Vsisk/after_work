@@ -225,3 +225,24 @@ def test_planner_falls_back_to_legacy_plan_when_stages_fail() -> None:
     assert plan.return_expr.type == "literal"
     assert len(planner.plan_attempts) == 2
     assert planner.plan_attempts[-1].stage == "plan"
+
+
+def test_planner_handles_legacy_payload_with_extra_expression_field_without_crashing() -> None:
+    planner = LLMPlanner(
+        StubOpenAIClient(
+            stage_responses={"plan_skeleton": {"bad": "payload"}},
+            plan_response={
+                "intent_summary": "legacy",
+                "expression_pattern": "function_call",
+                "expression": [
+                    {"field_name": "billInvoice.INVOICE_ID", "operator": "eq", "value": "1"}
+                ],
+            },
+        )
+    )
+
+    plan = planner.plan("legacy with extra expression", _node(), _env())
+
+    assert plan.return_expr.type == "literal"
+    assert any(item.code == "plan_generation_failed" for item in plan.diagnostics)
+    assert planner.plan_attempts[-1].stage == "plan"

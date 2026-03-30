@@ -86,10 +86,24 @@ class StubOpenAIClient:
             raw_response = self.repair_response
         else:
             raw_response = self.plan_response
-        parsed = response_parser(raw_response) if raw_response is not None and response_parser is not None else None
+        parsed = None
+        errors: list[LLMErrorRecord] = []
+        if raw_response is not None and response_parser is not None:
+            try:
+                parsed = response_parser(raw_response)
+            except Exception as exc:  # pragma: no cover - parity with real client schema failure handling
+                errors.append(
+                    LLMErrorRecord(
+                        stage=stage,
+                        code="response_schema_error",
+                        message=str(exc),
+                        raw_payload=raw_response if isinstance(raw_response, dict) else None,
+                        exception_type=type(exc).__name__,
+                    )
+                )
         return StructuredExecutionResult(
             parsed=parsed,
-            errors=[],
+            errors=errors,
             raw_payload=raw_response,
             attempt=LLMAttemptRecord(
                 stage=stage,
@@ -97,7 +111,7 @@ class StubOpenAIClient:
                 request_payload=payload,
                 response_payload=raw_response,
                 parsed_ok=parsed is not None,
-                errors=[],
+                errors=errors,
             ),
         )
 
@@ -310,6 +324,8 @@ class LLMPlanner:
         if "definitions" in payload and "return_expr" in payload:
             inferred = self._infer_skeleton_from_program_plan(payload)
             return inferred
+        if "expression_pattern" not in payload:
+            return None
         return PlannerSkeleton(
             expression_pattern=str(payload.get("expression_pattern") or "unknown"),
             require_context=bool(payload.get("require_context", True)),
