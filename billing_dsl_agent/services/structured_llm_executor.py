@@ -25,6 +25,18 @@ class PromptStructuredClient(Protocol):
         ...
 
 
+class InvokeRawStructuredClient(Protocol):
+    def invoke_raw(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        response_format: Mapping[str, Any] | str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+
 class LegacyStructuredClient(Protocol):
     def create_plan(self, payload: dict[str, Any]) -> Any:
         ...
@@ -76,6 +88,16 @@ class StructuredLLMExecutor:
                 )
                 request_payload = self._as_dict(getattr(raw_invocation, "request_payload", None))
                 response_payload = self._as_dict(getattr(raw_invocation, "response_payload", None))
+            elif hasattr(self.client, "invoke_raw"):
+                raw_invocation = self.client.invoke_raw(
+                    prompt_key=prompt_key,
+                    lang=active_lang,
+                    prompt_params=prompt_params,
+                    response_format=response_format,
+                    **kwargs,
+                )
+                request_payload = self._as_dict(getattr(raw_invocation, "request_payload", None))
+                response_payload = self._as_dict(getattr(raw_invocation, "response_payload", None))
             elif hasattr(self.client, "create_plan"):
                 prompt = self.prompt_manager.render_prompt(
                     prompt_key=prompt_key,
@@ -93,7 +115,7 @@ class StructuredLLMExecutor:
                 raw_response = self.client.create_plan(request_payload)
                 response_payload = self._normalize_legacy_response(raw_response)
             else:
-                raise TypeError("structured llm client must implement generate_raw() or create_plan()")
+                raise TypeError("structured llm client must implement generate_raw()/invoke_raw() or create_plan()")
         except PromptManagerError as exc:
             errors.append(
                 self._error(

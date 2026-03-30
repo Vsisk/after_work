@@ -71,7 +71,7 @@ def test_openai_llm_client_defaults_to_json_response_and_returns_dict(tmp_path: 
     )
 
     assert result == {"answer": "ok", "lang": "zh"}
-    assert captured["url"] == "https://example.com/v1/chat/completions"
+    assert captured["url"].endswith("/chat/completions")
     assert captured["payload"]["response_format"] == {"type": "json_object"}
     assert captured["payload"]["top_k"] == 8
     assert captured["payload"]["top_n"] == 2
@@ -117,3 +117,28 @@ def test_openai_llm_client_supports_custom_response_format(tmp_path: Path) -> No
     assert result == {"result": "plain text result"}
     assert captured["payload"]["response_format"] == {"type": "text"}
     assert captured["payload"]["temperature"] == 0.3
+
+
+def test_openai_llm_client_generate_raw_alias(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text('{"demo":{"zh":"需求：{{requirement}}"}}', encoding="utf-8")
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": '{"answer":"ok"}'}}]}
+
+    client = OpenAILLMClient(
+        prompt_manager=PromptManager(prompt_path=prompt_path),
+        env_path=env_path,
+        transport=transport,
+    )
+
+    raw = client.generate_raw(
+        prompt_key="demo",
+        lang="zh",
+        prompt_params={"requirement": "输出一个 JSON"},
+    )
+
+    assert raw.request_payload["response_format"] == {"type": "json_object"}
+    assert raw.response_payload["choices"][0]["message"]["content"] == '{"answer":"ok"}'

@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from billing_dsl_agent.services.llm_client import OpenAILLMClient
 from billing_dsl_agent.services.prompt_manager import PromptManager
 from billing_dsl_agent.services.structured_llm_executor import StructuredLLMExecutor
 
@@ -156,3 +157,32 @@ def test_structured_executor_falls_back_to_json_object_without_response_model(tm
 
     assert result.parsed is not None
     assert client.last_response_format == {"type": "json_object"}
+
+
+def test_structured_executor_accepts_openai_llm_client_invoke_raw(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text(
+        '{"semantic_selector_prompt":{"zh":"query={{query}}"}}',
+        encoding="utf-8",
+    )
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": '{"resource_id_list":["ctx_001"]}'}}]}
+
+    client = OpenAILLMClient(
+        prompt_manager=PromptManager(prompt_path=prompt_path),
+        env_path=env_path,
+        transport=transport,
+    )
+    executor = StructuredLLMExecutor(client=client, prompt_manager=PromptManager(prompt_path=prompt_path), default_lang="zh")
+    result = executor.execute(
+        prompt_key="semantic_selector_prompt",
+        prompt_params={"query": "hello"},
+        response_model=_SelectionModel,
+        stage="semantic_select",
+    )
+
+    assert result.parsed is not None
+    assert result.parsed.resource_id_list == ["ctx_001"]

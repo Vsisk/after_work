@@ -145,6 +145,39 @@ class OpenAILLMClient:
         )
         return post_process_response(raw_invocation.response_payload)
 
+
+    # Backward-compatible aliases to align with StructuredLLMExecutor client protocol.
+    def generate(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        response_format: Mapping[str, Any] | str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.invoke(
+            prompt_key=prompt_key,
+            lang=lang,
+            prompt_params=prompt_params,
+            response_format=response_format,
+            **kwargs,
+        )
+
+    def generate_raw(
+        self,
+        prompt_key: str,
+        lang: str,
+        prompt_params: Mapping[str, Any] | None = None,
+        response_format: Mapping[str, Any] | str | None = None,
+        **kwargs: Any,
+    ) -> RawLLMInvocation:
+        return self.invoke_raw(
+            prompt_key=prompt_key,
+            lang=lang,
+            prompt_params=prompt_params,
+            response_format=response_format,
+            **kwargs,
+        )
     def invoke_raw(
         self,
         prompt_key: str,
