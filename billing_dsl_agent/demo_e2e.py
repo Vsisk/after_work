@@ -9,12 +9,15 @@ from typing import Any
 from billing_dsl_agent.llm_planner import PlannerDetailPayload, PlannerSkeletonPayload
 from billing_dsl_agent.agent_entry import DSLAgent
 from billing_dsl_agent.environment import EnvironmentBuilder
+from billing_dsl_agent.log_utils import dumps_for_log, get_logger
 from billing_dsl_agent.llm_planner import LLMPlanner
 from billing_dsl_agent.models import LLMAttemptRecord, LLMErrorRecord
 from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, NodeDef
 from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
 from billing_dsl_agent.semantic_selector import OpenAISemanticSelector
 from billing_dsl_agent.services.llm_client import OpenAILLMClient, StructuredExecutionResult
+
+logger = get_logger(__name__)
 
 DEMO_SITE_ID = "demo-site"
 DEMO_PROJECT_ID = "demo-project"
@@ -69,6 +72,13 @@ class DemoStubLLMClient:
         **kwargs: Any,
     ) -> StructuredExecutionResult[Any]:
         payload = dict(prompt_params or {})
+        logger.info(
+            "demo_stub_llm_request stage=%s attempt=%s prompt_key=%s payload=%s",
+            stage,
+            attempt_index,
+            prompt_key,
+            dumps_for_log(payload),
+        )
         if stage == "semantic_select":
             raw_response = self._semantic_select(payload)
         elif stage == "plan_skeleton":
@@ -99,6 +109,13 @@ class DemoStubLLMClient:
                     )
                 )
 
+        logger.info(
+            "demo_stub_llm_response stage=%s attempt=%s response=%s errors=%s",
+            stage,
+            attempt_index,
+            dumps_for_log(raw_response),
+            [item.code for item in errors],
+        )
         return StructuredExecutionResult(
             parsed=parsed,
             errors=errors,

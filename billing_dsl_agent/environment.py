@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from billing_dsl_agent.log_utils import get_logger
 from billing_dsl_agent.local_context_normalizer import normalize_local_contexts
 from billing_dsl_agent.local_context_resolver import resolve_visible_local_contexts
 from billing_dsl_agent.models import (
@@ -18,6 +19,8 @@ from billing_dsl_agent.models import (
 from billing_dsl_agent.resource_manager import ResourceManager
 from billing_dsl_agent.semantic_selector import CandidateSummary, MockSemanticSelector, SemanticSelector, SelectionResult
 
+logger = get_logger(__name__)
+
 
 @dataclass(slots=True)
 class EnvironmentBuilder:
@@ -25,6 +28,12 @@ class EnvironmentBuilder:
     resource_manager: ResourceManager = field(default_factory=ResourceManager)
 
     def build_filtered_environment(self, node_info: NodeDef, user_query: str, registry: ResourceRegistry) -> FilteredEnvironment:
+        logger.info(
+            "environment_build_started node_id=%s node_path=%s user_query=%s",
+            node_info.node_id,
+            node_info.node_path,
+            user_query,
+        )
         working_registry = ResourceRegistry(
             contexts=dict(registry.contexts),
             bos=dict(registry.bos),
@@ -35,6 +44,11 @@ class EnvironmentBuilder:
         resolved_local_contexts = resolve_visible_local_contexts(working_registry.edsl_tree, node_info.node_path)
         visible_local_context = normalize_local_contexts(resolved_local_contexts)
         local_context_ids = [item.resource_id for item in visible_local_context.ordered_nodes]
+        logger.info(
+            "local_context_resolution_completed node_path=%s visible_local_context_ids=%s",
+            node_info.node_path,
+            local_context_ids,
+        )
         local_debug = ResourceSelectionDebug(
             resource_type="local_context",
             strategy="rule_only",
@@ -47,6 +61,12 @@ class EnvironmentBuilder:
         eligible_global_contexts = self._eligible_global_contexts(node_info, user_query, working_registry)
         eligible_bos = self._eligible_bos(node_info, user_query, working_registry)
         eligible_functions = dict(working_registry.functions)
+        logger.info(
+            "environment_eligibility_completed eligible_global_contexts=%s eligible_bos=%s eligible_functions=%s",
+            len(eligible_global_contexts),
+            len(eligible_bos),
+            len(eligible_functions),
+        )
 
         indexes = self.resource_manager.build_indexes(
             context_registry_or_vars=list(eligible_global_contexts.values()),
@@ -57,6 +77,12 @@ class EnvironmentBuilder:
             user_query=user_query,
             node_def=node_info,
             indexes=indexes,
+        )
+        logger.info(
+            "candidate_recall_completed context_candidates=%s bo_candidates=%s function_candidates=%s",
+            len(candidate_set.context_candidates),
+            len(candidate_set.bo_candidates),
+            len(candidate_set.function_candidates),
         )
 
         global_context_selection = self._select_global_contexts(
@@ -85,6 +111,12 @@ class EnvironmentBuilder:
         selected_global_contexts = self._resolve_contexts(global_context_selection.selected_ids, eligible_global_contexts)
         selected_bos = self._resolve_bos(bo_selection.selected_ids, eligible_bos)
         selected_functions = self._resolve_functions(function_selection.selected_ids, eligible_functions)
+        logger.info(
+            "environment_selection_completed global_context_ids=%s bo_ids=%s function_ids=%s",
+            [item.resource_id for item in selected_global_contexts],
+            [item.resource_id for item in selected_bos],
+            [item.resource_id for item in selected_functions],
+        )
 
         selection_debug = EnvironmentSelectionBundle(
             global_context=self._build_selection_debug("global_context", global_context_selection),

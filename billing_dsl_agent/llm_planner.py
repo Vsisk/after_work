@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
+from billing_dsl_agent.log_utils import dumps_for_log, get_logger
 from billing_dsl_agent.llm_planner_models import (
     AllowedNodeType,
     AllowedQueryKind,
@@ -54,6 +55,8 @@ from billing_dsl_agent.plan_validator import (
     validate_program_plan_structure,
 )
 from billing_dsl_agent.services.llm_client import OpenAILLMClient, StructuredExecutionResult
+
+logger = get_logger(__name__)
 
 SUPPORTED_NODE_TYPES: list[AllowedNodeType] = [
     AllowedNodeType.LITERAL,
@@ -220,6 +223,13 @@ class StubOpenAIClient:
     ) -> StructuredExecutionResult[Any]:
         payload = dict(prompt_params or {})
         self.last_payload = payload
+        logger.info(
+            "stub_llm_request stage=%s attempt=%s prompt_key=%s payload=%s",
+            stage,
+            attempt_index,
+            prompt_key,
+            dumps_for_log(payload),
+        )
         if stage in self.stage_responses:
             raw_response = self.stage_responses[stage]
         elif stage == "repair":
@@ -244,6 +254,13 @@ class StubOpenAIClient:
                         exception_type=type(exc).__name__,
                     )
                 )
+        logger.info(
+            "stub_llm_response stage=%s attempt=%s response=%s errors=%s",
+            stage,
+            attempt_index,
+            dumps_for_log(raw_response),
+            [item.code for item in errors],
+        )
         return StructuredExecutionResult(
             parsed=parsed,
             errors=errors,
@@ -279,24 +296,46 @@ class LLMPlanner:
         self.repair_attempts = []
         self.llm_errors = []
         self.planner_diagnostics = PlannerDiagnostics()
+        logger.info(
+            "planner_started user_requirement=%s node_id=%s node_path=%s",
+            user_requirement,
+            node_def.node_id,
+            node_def.node_path,
+        )
 
         base_input = self._build_base_plan_input(user_requirement=user_requirement, node_def=node_def, env=env)
         stage1_result = self._run_stage1_base_plan(base_input)
         if not stage1_result.success or stage1_result.payload is None:
+            logger.warning(
+                "planner_stage_failed stage=plan_base errors=%s",
+                [item.code for item in stage1_result.errors],
+            )
             return self._failed_plan(
                 raw_plan=stage1_result.raw_response,
                 default_code="stage1_base_plan_failed",
                 errors=stage1_result.errors,
             )
+        logger.info(
+            "planner_stage_completed stage=plan_base payload=%s",
+            dumps_for_log(stage1_result.payload),
+        )
 
         spec_input = self._build_filtered_spec_input(base_plan=stage1_result.payload, planner_limits=base_input.planner_runtime_limits)
         spec_result = self._build_filtered_spec(spec_input)
         if not spec_result.success or spec_result.payload is None:
+            logger.warning(
+                "planner_stage_failed stage=plan_spec errors=%s",
+                [item.code for item in spec_result.errors],
+            )
             return self._failed_plan(
                 raw_plan=spec_result.raw_response,
                 default_code="stage2_filtered_spec_failed",
                 errors=spec_result.errors,
             )
+        logger.info(
+            "planner_stage_completed stage=plan_spec payload=%s",
+            dumps_for_log(spec_result.payload),
+        )
 
         final_input = self._build_final_plan_input(
             user_requirement=user_requirement,
@@ -308,12 +347,20 @@ class LLMPlanner:
         )
         stage3_result = self._run_stage3_final_plan(final_input)
         if not stage3_result.success or stage3_result.payload is None:
+            logger.warning(
+                "planner_stage_failed stage=plan_final errors=%s",
+                [item.code for item in stage3_result.errors],
+            )
             return self._failed_plan(
                 raw_plan=stage3_result.raw_response,
                 default_code="stage3_final_plan_failed",
                 errors=stage3_result.errors,
             )
 
+        logger.info(
+            "planner_stage_completed stage=plan_final payload=%s",
+            dumps_for_log(stage3_result.payload),
+        )
         return self._adapt_internal_final_plan_to_program_plan(stage3_result.payload)
 
     def repair(
@@ -326,6 +373,11 @@ class LLMPlanner:
         invalid_plan_payload = invalid_plan.raw_plan or invalid_plan.model_dump(mode="python")
         issues_payload = [item.model_dump(mode="python") for item in issues]
         prior_errors_payload = [item.model_dump(mode="python") for item in self.llm_errors]
+        logger.info(
+            "planner_repair_started issues=%s invalid_plan=%s",
+            dumps_for_log(issues_payload),
+            dumps_for_log(invalid_plan_payload),
+        )
         execution = self.client.execute_structured(
             prompt_key="dsl_repair_prompt",
             lang=self.prompt_lang,
@@ -346,6 +398,11 @@ class LLMPlanner:
         )
         self.repair_attempts.append(execution.attempt)
         self.llm_errors.extend(execution.errors)
+        logger.info(
+            "planner_repair_completed parsed=%s error_codes=%s",
+            execution.parsed is not None,
+            [item.code for item in execution.errors],
+        )
         return execution.parsed
 
     def _build_base_plan_input(self, user_requirement: str, node_def: NodeDef, env: FilteredEnvironment) -> BasePlanInput:

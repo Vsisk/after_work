@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from billing_dsl_agent.log_utils import dumps_for_log, get_logger
 from billing_dsl_agent.models import (
     BinaryOpPlanNode,
     ContextRefPlanNode,
@@ -34,6 +35,8 @@ from billing_dsl_agent.models import (
     LiteralPlanNode,
 )
 from billing_dsl_agent.resource_manager import normalize_function_type
+
+logger = get_logger(__name__)
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -73,10 +76,22 @@ class PlanValidator:
         attempts = 0
         repair_attempts = []
         llm_errors = []
+        logger.info(
+            "plan_validation_started definition_count=%s return_type=%s",
+            len(current.definitions),
+            getattr(current.return_expr, "type", ""),
+        )
         while True:
             issues = self._collect_issues(current, env)
             blocking_issues = [item for item in issues if item.severity != "warning"]
+            logger.info(
+                "plan_validation_iteration attempt=%s blocking_issue_codes=%s warning_issue_codes=%s",
+                attempts,
+                [item.code for item in blocking_issues],
+                [item.code for item in issues if item.severity == "warning"],
+            )
             if not blocking_issues:
+                logger.info("plan_validation_succeeded repair_attempts=%s", len(repair_attempts))
                 return ValidationResult(
                     is_valid=True,
                     issues=issues,
@@ -85,6 +100,7 @@ class PlanValidator:
                     llm_errors=list(llm_errors),
                 )
             if self.planner is None or attempts >= self.max_retries:
+                logger.warning("plan_validation_failed attempts=%s issues=%s", attempts, dumps_for_log(blocking_issues))
                 return ValidationResult(
                     is_valid=False,
                     issues=blocking_issues,
@@ -92,10 +108,12 @@ class PlanValidator:
                     repair_attempts=list(repair_attempts),
                     llm_errors=list(llm_errors),
                 )
+            logger.info("plan_repair_started attempt=%s issues=%s", attempts + 1, dumps_for_log(blocking_issues))
             repaired = self.planner.repair(current, env, blocking_issues)
             repair_attempts = list(getattr(self.planner, "repair_attempts", repair_attempts))
             llm_errors = list(getattr(self.planner, "llm_errors", llm_errors))
             if repaired is None:
+                logger.warning("plan_repair_failed attempt=%s reason=no_repaired_plan", attempts + 1)
                 return ValidationResult(
                     is_valid=False,
                     issues=blocking_issues,
@@ -104,6 +122,7 @@ class PlanValidator:
                     llm_errors=list(llm_errors),
                 )
             if _plans_equivalent(current, repaired):
+                logger.warning("plan_repair_failed attempt=%s reason=no_progress", attempts + 1)
                 issues = _dedupe_issues(
                     [
                         *blocking_issues,
@@ -121,6 +140,7 @@ class PlanValidator:
                     repair_attempts=list(repair_attempts),
                     llm_errors=list(llm_errors),
                 )
+            logger.info("plan_repair_completed attempt=%s repaired_plan=%s", attempts + 1, dumps_for_log(repaired))
             current = repaired
             attempts += 1
 

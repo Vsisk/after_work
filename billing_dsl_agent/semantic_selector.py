@@ -5,8 +5,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List
 
+from billing_dsl_agent.log_utils import get_logger
 from billing_dsl_agent.models import LLMErrorRecord, NodeDef, ResourceSelectionOutput
 from billing_dsl_agent.services.llm_client import OpenAILLMClient
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -60,11 +63,23 @@ class OpenAISemanticSelector(SemanticSelector):
     ) -> SelectionResult:
         candidates = list(candidate_summaries)
         if not candidates:
+            logger.info(
+                "semantic_selection_skipped task_type=%s node_id=%s reason=no_candidates",
+                task_type,
+                node_info.node_id,
+            )
             return SelectionResult(selected_ids=[], candidate_ids=[])
 
         allowed = {item.resource_id for item in candidates}
         fallback_ids = [item.resource_id for item in candidates[: self.default_top_k]]
         candidate_ids = [item.resource_id for item in candidates]
+        logger.info(
+            "semantic_selection_started task_type=%s node_id=%s candidate_count=%s fallback_ids=%s",
+            task_type,
+            node_info.node_id,
+            len(candidates),
+            fallback_ids,
+        )
         prompt_params = {
             "task_type": task_type,
             "user_query": user_query,
@@ -98,6 +113,11 @@ class OpenAISemanticSelector(SemanticSelector):
             stage="semantic_select",
         )
         if execution.parsed is None:
+            logger.warning(
+                "semantic_selection_fallback task_type=%s reason=parse_failed errors=%s",
+                task_type,
+                [item.code for item in execution.errors],
+            )
             return SelectionResult(
                 selected_ids=fallback_ids,
                 candidate_ids=candidate_ids,
@@ -107,6 +127,11 @@ class OpenAISemanticSelector(SemanticSelector):
 
         filtered = [item for item in execution.parsed.resource_id_list if item in allowed]
         if filtered:
+            logger.info(
+                "semantic_selection_completed task_type=%s selected_ids=%s",
+                task_type,
+                filtered[: self.default_top_k],
+            )
             return SelectionResult(
                 selected_ids=filtered[: self.default_top_k],
                 candidate_ids=candidate_ids,
@@ -151,8 +176,15 @@ class MockSemanticSelector(SemanticSelector):
             if score > 0:
                 scored.append((score, item.resource_id))
         scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        selected_ids = [resource_id for _, resource_id in scored[: self.top_k]]
+        logger.info(
+            "mock_semantic_selection_completed task_type=%s node_id=%s selected_ids=%s",
+            task_type,
+            node_info.node_id,
+            selected_ids,
+        )
         return SelectionResult(
-            selected_ids=[resource_id for _, resource_id in scored[: self.top_k]],
+            selected_ids=selected_ids,
             candidate_ids=[item.resource_id for item in candidates],
         )
 

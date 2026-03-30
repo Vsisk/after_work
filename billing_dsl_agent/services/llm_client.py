@@ -4,6 +4,7 @@ import json
 import os
 import base64
 import mimetypes
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,10 +14,13 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ValidationError
 
+from billing_dsl_agent.log_utils import dumps_for_log, get_logger
 from billing_dsl_agent.models import LLMErrorRecord, LLMAttemptRecord
 from billing_dsl_agent.services.llm_post_processor import extract_response_text
 from billing_dsl_agent.services.llm_post_processor import post_process_response
 from billing_dsl_agent.services.prompt_manager import PromptManager, PromptManagerError
+
+logger = get_logger(__name__)
 
 _DEFAULT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 _DEFAULT_TIMEOUT = 600.0
@@ -244,11 +248,30 @@ class OpenAILLMClient(BaseOpenAILLMClient):
         prompt = self.prompt_manager.render_prompt(prompt_key, lang, prompt_params)
         payload = self._build_payload(prompt=prompt, response_format=response_format, extra_params=kwargs, model=config.model)
         request_url = self._resolve_request_url(config)
+        logger.info(
+            "llm_request_started llm_name=%s model=%s prompt_key=%s lang=%s request_url=%s payload=%s",
+            config.name,
+            config.model,
+            prompt_key,
+            lang,
+            request_url,
+            dumps_for_log(payload),
+        )
+        started_at = time.perf_counter()
         raw_response = self.transport(
             request_url,
             payload,
             self._build_headers(config),
             config.timeout,
+        )
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        logger.info(
+            "llm_request_completed llm_name=%s model=%s prompt_key=%s duration_ms=%s response=%s",
+            config.name,
+            config.model,
+            prompt_key,
+            duration_ms,
+            dumps_for_log(raw_response),
         )
         return RawLLMInvocation(
             request_url=request_url,
@@ -293,11 +316,30 @@ class OpenAILLMClient(BaseOpenAILLMClient):
         payload = {"model": config.model, "messages": [{"role": "user", "content": content}]}
         payload.update(extract_param(kwargs))
         request_url = self._resolve_request_url(config)
+        logger.info(
+            "llm_multimodal_request_started llm_name=%s model=%s prompt_key=%s lang=%s request_url=%s payload=%s",
+            config.name,
+            config.model,
+            prompt_key,
+            lang,
+            request_url,
+            dumps_for_log(payload),
+        )
+        started_at = time.perf_counter()
         raw_response = self.transport(
             request_url,
             payload,
             self._build_headers(config),
             config.timeout,
+        )
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        logger.info(
+            "llm_multimodal_request_completed llm_name=%s model=%s prompt_key=%s duration_ms=%s response=%s",
+            config.name,
+            config.model,
+            prompt_key,
+            duration_ms,
+            dumps_for_log(raw_response),
         )
         return RawLLMInvocation(request_url=request_url, request_payload=payload, response_payload=raw_response)
 
@@ -319,6 +361,12 @@ class OpenAILLMClient(BaseOpenAILLMClient):
         raw_text = ""
         errors: list[LLMErrorRecord] = []
         response_format = self._build_response_format(response_model)
+        logger.info(
+            "structured_llm_execution_started stage=%s attempt=%s prompt_key=%s",
+            stage,
+            attempt_index,
+            prompt_key,
+        )
 
         try:
             raw_invocation = self.invoke_raw(
@@ -332,6 +380,11 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             request_payload = self._as_dict(getattr(raw_invocation, "request_payload", None))
             response_payload = self._as_dict(getattr(raw_invocation, "response_payload", None))
         except PromptManagerError as exc:
+            logger.exception(
+                "structured_llm_execution_failed stage=%s attempt=%s code=prompt_render_error",
+                stage,
+                attempt_index,
+            )
             errors.append(
                 self._error(
                     stage=stage,
@@ -343,6 +396,11 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             )
             return self._result(None, errors, stage, attempt_index, request_payload, response_payload)
         except Exception as exc:
+            logger.exception(
+                "structured_llm_execution_failed stage=%s attempt=%s code=llm_request_error",
+                stage,
+                attempt_index,
+            )
             errors.append(
                 self._error(
                     stage=stage,
@@ -355,6 +413,11 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             return self._result(None, errors, stage, attempt_index, request_payload, response_payload)
 
         if not response_payload:
+            logger.warning(
+                "structured_llm_execution_failed stage=%s attempt=%s code=empty_response",
+                stage,
+                attempt_index,
+            )
             errors.append(
                 self._error(
                     stage=stage,
@@ -371,6 +434,12 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             try:
                 loaded = json.loads(raw_text)
             except json.JSONDecodeError as exc:
+                logger.warning(
+                    "structured_llm_execution_failed stage=%s attempt=%s code=response_not_json raw_text=%s",
+                    stage,
+                    attempt_index,
+                    raw_text,
+                )
                 errors.append(
                     self._error(
                         stage=stage,
@@ -383,6 +452,11 @@ class OpenAILLMClient(BaseOpenAILLMClient):
                 )
                 return self._result(None, errors, stage, attempt_index, request_payload, response_payload, raw_text)
             if not isinstance(loaded, dict):
+                logger.warning(
+                    "structured_llm_execution_failed stage=%s attempt=%s code=response_root_not_object",
+                    stage,
+                    attempt_index,
+                )
                 errors.append(
                     self._error(
                         stage=stage,
@@ -402,6 +476,12 @@ class OpenAILLMClient(BaseOpenAILLMClient):
                 parsed_payload = dict(response_payload)
 
         if parsed_payload is None:
+            logger.warning(
+                "structured_llm_execution_failed stage=%s attempt=%s code=empty_response_text response=%s",
+                stage,
+                attempt_index,
+                dumps_for_log(response_payload),
+            )
             errors.append(
                 self._error(
                     stage=stage,
@@ -420,6 +500,12 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             else:
                 raise TypeError("response_model or response_parser is required")
         except (ValidationError, ValueError, TypeError) as exc:
+            logger.warning(
+                "structured_llm_execution_failed stage=%s attempt=%s code=response_schema_error parsed_payload=%s",
+                stage,
+                attempt_index,
+                dumps_for_log(parsed_payload),
+            )
             errors.append(
                 self._error(
                     stage=stage,
@@ -432,6 +518,13 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             )
             return self._result(None, errors, stage, attempt_index, request_payload, response_payload, raw_text)
 
+        logger.info(
+            "structured_llm_execution_completed stage=%s attempt=%s parsed=%s parsed_payload=%s",
+            stage,
+            attempt_index,
+            parsed is not None,
+            dumps_for_log(parsed_payload),
+        )
         return self._result(parsed, errors, stage, attempt_index, request_payload, response_payload, raw_text)
 
     def _build_payload(
