@@ -1010,7 +1010,14 @@ def _bo_has_field(bo: Any, field_name: str) -> bool:
 
 
 def _bo_has_naming_sql(bo: Any, naming_sql: str) -> bool:
-    return any(sql_id == naming_sql or _suffix_name(sql_id) == naming_sql for sql_id in bo.naming_sql_ids)
+    candidate_names = {str(naming_sql or "").strip(), _suffix_name(str(naming_sql or "").strip())}
+    bo_ids = set(getattr(bo, "naming_sql_ids", []) or [])
+    if any(sql_id in candidate_names or _suffix_name(sql_id) in candidate_names for sql_id in bo_ids):
+        return True
+    name_by_key = dict(getattr(bo, "naming_sql_name_by_key", {}) or {})
+    if any(str(key) in candidate_names or str(value) in candidate_names for key, value in name_by_key.items()):
+        return True
+    return False
 
 
 def _resolve_naming_sql_matches(expr: QueryCallPlanNode, env: FilteredEnvironment) -> list[tuple[str, Any, Any]]:
@@ -1113,7 +1120,7 @@ def _naming_type_ref(data_type: str, data_type_name: str, is_list: bool | None, 
 def compare_namingsql_param_type(expected: Any, actual: Any) -> NamingSQLParamTypeMatchResult:
     expected_data_type = str(getattr(expected, "data_type", "") or "")
     actual_data_type = str(getattr(actual, "data_type", "") or "")
-    if expected_data_type != actual_data_type:
+    if expected_data_type and expected_data_type != actual_data_type:
         return NamingSQLParamTypeMatchResult(
             matched=False,
             mismatch_stage="data_type",
@@ -1122,7 +1129,7 @@ def compare_namingsql_param_type(expected: Any, actual: Any) -> NamingSQLParamTy
 
     expected_data_type_name = str(getattr(expected, "data_type_name", "") or "")
     actual_data_type_name = str(getattr(actual, "data_type_name", "") or "")
-    if expected_data_type_name != actual_data_type_name:
+    if expected_data_type_name and expected_data_type_name != actual_data_type_name:
         return NamingSQLParamTypeMatchResult(
             matched=False,
             mismatch_stage="data_type_name",
@@ -1131,7 +1138,7 @@ def compare_namingsql_param_type(expected: Any, actual: Any) -> NamingSQLParamTy
 
     expected_is_list = getattr(expected, "is_list", None)
     actual_is_list = getattr(actual, "is_list", None)
-    if expected_is_list != actual_is_list:
+    if expected_is_list is not None and expected_is_list != actual_is_list:
         return NamingSQLParamTypeMatchResult(
             matched=False,
             mismatch_stage="is_list",

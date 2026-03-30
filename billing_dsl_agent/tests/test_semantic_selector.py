@@ -13,6 +13,7 @@ from billing_dsl_agent.semantic_selector import CandidateSummary, OpenAISemantic
 class _StubSelectorClient:
     response: Optional[Dict[str, Any]]
     last_payload: Optional[Dict[str, Any]] = None
+    prompt_manager: PromptManager | None = None
 
     def execute_structured(
         self,

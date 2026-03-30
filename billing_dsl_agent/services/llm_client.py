@@ -19,7 +19,7 @@ from billing_dsl_agent.services.llm_post_processor import post_process_response
 from billing_dsl_agent.services.prompt_manager import PromptManager, PromptManagerError
 
 _DEFAULT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
-_DEFAULT_TIMEOUT = 60.0
+_DEFAULT_TIMEOUT = 600.0
 _SUPPORTED_MODEL_PARAMS = {
     "frequency_penalty",
     "max_completion_tokens",
@@ -446,6 +446,7 @@ class OpenAILLMClient(BaseOpenAILLMClient):
             "messages": [{"role": "user", "content": prompt}],
             "response_format": _normalize_response_format(response_format),
         }
+        payload.update({"enable_thinking": False})
         payload.update(extract_param(extra_params))
         return payload
 
