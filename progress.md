@@ -8,3 +8,4 @@
 - 2026-03-28 需求执行记录：按评审要求收敛 function 管理模型，移除 `FunctionRegistry.functions_by_name`，统一保留 `resource_id/function_id -> FunctionResource` 索引；同步调整 Environment 克隆逻辑、PlanValidator 函数解析分支及相关测试断言，确保 function 资源管理与其他资源一致。
 - 2026-03-28 需求执行记录：按“function 与 function_registry 仅保留一个”要求继续收敛，移除 `ResourceRegistry.function_registry` 与 `FunctionRegistry` 模型，函数统一仅由 `registry.functions (resource_id -> FunctionResource)` 管理；同步简化 EnvironmentBuilder/PlanValidator 解析逻辑与相关单测。
 - 2026-03-30 需求执行记录：针对 StructuredLLMExecutor 与 OpenAILLMClient 功能重叠问题完成首轮收敛：OpenAILLMClient 新增 `generate/generate_raw` 别名接口，StructuredLLMExecutor 增加 `invoke_raw` 协议兼容，补充对应单测并验证通过。
+- 2026-03-30 需求执行记录：按“仅保留 OpenAILLMClient”决策完成单类收敛：将结构化执行能力迁移至 OpenAILLMClient，LLMPlanner/语义选择器改为直接依赖 client，删除 StructuredLLMExecutor 与 PromptDrivenLLMService，并同步迁移测试。

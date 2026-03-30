@@ -1,8 +1,9 @@
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from billing_dsl_agent.services.llm_client import OpenAILLMClient, extract_param
-from billing_dsl_agent.services.llm_service import PromptDrivenLLMService
 from billing_dsl_agent.services.prompt_manager import PromptManager
 
 
@@ -98,15 +99,13 @@ def test_openai_llm_client_supports_custom_response_format(tmp_path: Path) -> No
             ]
         }
 
-    service = PromptDrivenLLMService(
-        client=OpenAILLMClient(
-            prompt_manager=PromptManager(prompt_path=prompt_path),
-            env_path=env_path,
-            transport=transport,
-        )
+    client = OpenAILLMClient(
+        prompt_manager=PromptManager(prompt_path=prompt_path),
+        env_path=env_path,
+        transport=transport,
     )
 
-    result = service.generate(
+    result = client.invoke(
         prompt_key="demo",
         lang="en",
         prompt_params={"name": "OpenAI"},
@@ -119,14 +118,43 @@ def test_openai_llm_client_supports_custom_response_format(tmp_path: Path) -> No
     assert captured["payload"]["temperature"] == 0.3
 
 
-def test_openai_llm_client_generate_raw_alias(tmp_path: Path) -> None:
+class _SelectionModel(BaseModel):
+    resource_id_list: list[str]
+
+
+def test_openai_llm_client_structured_reports_prompt_render_error(tmp_path: Path) -> None:
     prompt_path = tmp_path / "prompt.json"
     env_path = tmp_path / ".env"
-    prompt_path.write_text('{"demo":{"zh":"需求：{{requirement}}"}}', encoding="utf-8")
+    prompt_path.write_text(
+        '{"semantic_selector_prompt":{"zh":"query={{query}}","en":"query={{query}}"}}',
+        encoding="utf-8",
+    )
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+    client = OpenAILLMClient(prompt_manager=PromptManager(prompt_path=prompt_path), env_path=env_path)
+
+    result = client.execute_structured(
+        prompt_key="semantic_selector_prompt",
+        prompt_params={},
+        response_model=_SelectionModel,
+        stage="semantic_select",
+        lang="zh",
+    )
+
+    assert result.parsed is None
+    assert result.errors[0].code == "prompt_render_error"
+
+
+def test_openai_llm_client_structured_reports_request_error(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text(
+        '{"semantic_selector_prompt":{"zh":"query={{query}}","en":"query={{query}}"}}',
+        encoding="utf-8",
+    )
     env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
 
     def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
-        return {"choices": [{"message": {"content": '{"answer":"ok"}'}}]}
+        raise RuntimeError("boom")
 
     client = OpenAILLMClient(
         prompt_manager=PromptManager(prompt_path=prompt_path),
@@ -134,11 +162,105 @@ def test_openai_llm_client_generate_raw_alias(tmp_path: Path) -> None:
         transport=transport,
     )
 
-    raw = client.generate_raw(
-        prompt_key="demo",
+    result = client.execute_structured(
+        prompt_key="semantic_selector_prompt",
+        prompt_params={"query": "hello"},
+        response_model=_SelectionModel,
+        stage="semantic_select",
         lang="zh",
-        prompt_params={"requirement": "输出一个 JSON"},
     )
 
-    assert raw.request_payload["response_format"] == {"type": "json_object"}
-    assert raw.response_payload["choices"][0]["message"]["content"] == '{"answer":"ok"}'
+    assert result.parsed is None
+    assert result.errors[0].code == "llm_request_error"
+
+
+def test_openai_llm_client_structured_reports_non_json_output(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text(
+        '{"semantic_selector_prompt":{"zh":"query={{query}}","en":"query={{query}}"}}',
+        encoding="utf-8",
+    )
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": "plain text"}}]}
+
+    client = OpenAILLMClient(
+        prompt_manager=PromptManager(prompt_path=prompt_path),
+        env_path=env_path,
+        transport=transport,
+    )
+
+    result = client.execute_structured(
+        prompt_key="semantic_selector_prompt",
+        lang="zh",
+        prompt_params={"query": "hello"},
+        response_model=_SelectionModel,
+        stage="semantic_select",
+    )
+
+    assert result.parsed is None
+    assert result.errors[0].code == "response_not_json"
+
+
+def test_openai_llm_client_structured_reports_schema_error(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text(
+        '{"semantic_selector_prompt":{"zh":"query={{query}}","en":"query={{query}}"}}',
+        encoding="utf-8",
+    )
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": '{"wrong_key": []}'}}]}
+
+    client = OpenAILLMClient(
+        prompt_manager=PromptManager(prompt_path=prompt_path),
+        env_path=env_path,
+        transport=transport,
+    )
+
+    result = client.execute_structured(
+        prompt_key="semantic_selector_prompt",
+        lang="zh",
+        prompt_params={"query": "hello"},
+        response_model=_SelectionModel,
+        stage="semantic_select",
+    )
+
+    assert result.parsed is None
+    assert result.errors[0].code == "response_schema_error"
+
+
+def test_openai_llm_client_structured_uses_json_schema_response_format(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.json"
+    env_path = tmp_path / ".env"
+    prompt_path.write_text(
+        '{"semantic_selector_prompt":{"zh":"query={{query}}","en":"query={{query}}"}}',
+        encoding="utf-8",
+    )
+    env_path.write_text("OPENAI_API_KEY=test-key", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": '{"resource_id_list":["ctx_001"]}'}}]}
+
+    client = OpenAILLMClient(
+        prompt_manager=PromptManager(prompt_path=prompt_path),
+        env_path=env_path,
+        transport=transport,
+    )
+
+    result = client.execute_structured(
+        prompt_key="semantic_selector_prompt",
+        lang="zh",
+        prompt_params={"query": "hello"},
+        response_model=_SelectionModel,
+        stage="semantic_select",
+    )
+
+    assert result.parsed is not None
+    assert captured["payload"]["response_format"]["type"] == "json_schema"
