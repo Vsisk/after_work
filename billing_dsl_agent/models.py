@@ -248,90 +248,176 @@ class GenerateDSLDebug(StrictModel):
 
 
 class LiteralPlanNode(StrictModel):
-    type: Literal["literal"]
-    value: Any = None
+    type: Literal["literal"] = Field(
+        description="表达式节点类型，固定为 `literal`。"
+    )
+    value: Any = Field(
+        default=None,
+        description="字面量值本身。可填写数字、字符串、布尔值或 null。示例：`1`、`\"ok\"`。",
+    )
 
 
 class ContextRefPlanNode(StrictModel):
-    type: Literal["context_ref"]
-    path: str
+    type: Literal["context_ref"] = Field(
+        description="表达式节点类型，固定为 `context_ref`。"
+    )
+    path: str = Field(
+        description="全局上下文变量完整路径。必须可直接写入 DSL，例如 `$ctx$.billStatement.prepareId`。不要填写 id、name 或路径片段。"
+    )
 
 
 class LocalRefPlanNode(StrictModel):
-    type: Literal["local_ref"]
-    path: str
+    type: Literal["local_ref"] = Field(
+        description="表达式节点类型，固定为 `local_ref`。"
+    )
+    path: str = Field(
+        description="局部上下文变量完整路径。必须可直接写入 DSL，例如 `$local$.currentCycle`。不要填写 id、name 或路径片段。"
+    )
 
 
 class VarRefPlanNode(StrictModel):
-    type: Literal["var_ref"]
-    name: str
+    type: Literal["var_ref"] = Field(
+        description="表达式节点类型，固定为 `var_ref`。"
+    )
+    name: str = Field(description="变量名，例如 `amount`。")
 
 
 class QueryFilterPlanNode(StrictModel):
-    field: str
-    value: "ExprPlanNode"
+    field: str = Field(
+        description="【内部兼容字段】过滤左值字段名（如 `PREPARE_ID`）。优先使用 `query_call.filter_expr`，不要在 LLM 输出中单独拆分此字段。"
+    )
+    value: "ExprPlanNode" = Field(
+        description="【内部兼容字段】过滤右值表达式节点。优先使用 `query_call.filter_expr`。"
+    )
 
 
 class QueryPairPlanNode(StrictModel):
-    key: str
-    value: "ExprPlanNode"
+    key: str = Field(
+        description="【内部兼容字段】pair 的参数名（第一项）。优先使用 `query_call.params[].param_name`。"
+    )
+    value: "ExprPlanNode" = Field(
+        description="【内部兼容字段】pair 的参数值表达式（第二项）。优先使用 `query_call.params[].value_expr`。"
+    )
+
+
+class FetchParamPlanNode(StrictModel):
+    param_name: str = Field(
+        description="namingSQL 的参数名，对应 DSL `pair(param_name, value)` 的第一项。示例：`OFFERING_ID`。不要填写参数 id。"
+    )
+    value_expr: str = Field(
+        description="参数值表达式，对应 DSL `pair(param_name, value)` 的第二项。示例：`oid`、`$ctx$.billStatement.prepareId`。不要填写 `pair(...)` 拼接字符串。"
+    )
 
 
 class FunctionCallPlanNode(StrictModel):
-    type: Literal["function_call"]
-    function_name: str | None = None
-    function_id: str | None = None
-    args: List["ExprPlanNode"] = Field(default_factory=list)
+    type: Literal["function_call"] = Field(
+        description="表达式节点类型，固定为 `function_call`。"
+    )
+    function_name: str | None = Field(
+        default=None,
+        description="函数名称（首选）。示例：`Common.Double2Str`。只填写名称，不要填写 function id。",
+    )
+    function_id: str | None = Field(
+        default=None,
+        description="【内部兼容字段】函数 id。仅兼容旧链路，LLM 不应填写。",
+    )
+    args: List["ExprPlanNode"] = Field(
+        default_factory=list,
+        description="按顺序传入的参数表达式节点列表。每个参数应表达真实值语义。",
+    )
 
 
 class QueryCallPlanNode(StrictModel):
-    type: Literal["query_call"]
-    query_kind: Literal["select", "select_one", "fetch", "fetch_one"]
-    source_name: str
-    field: str | None = None
-    bo_id: str | None = None
-    data_source: str | None = None
-    naming_sql_id: str | None = None
-    filters: List[QueryFilterPlanNode] = Field(default_factory=list)
-    where: ExprPlanNode | None = None
-    pairs: List[QueryPairPlanNode] = Field(default_factory=list)
+    type: Literal["query_call"] = Field(
+        description="表达式节点类型，固定为 `query_call`。"
+    )
+    query_kind: Literal["select", "select_one", "fetch", "fetch_one"] = Field(
+        description="查询调用类型。`select/select_one` 使用 BO；`fetch/fetch_one` 使用 namingSQL。"
+    )
+    source_name: str = Field(
+        description="【兼容字段】查询目标名称。select 场景等价于 `bo_name`，fetch 场景等价于 `naming_sql_name`。"
+    )
+    bo_name: str | None = Field(
+        default=None,
+        description="select/select_one 的 BO 名称。示例：`BB_PREP_SUB`。只填写名称，不要填写 BO id。",
+    )
+    filter_expr: str | None = Field(
+        default=None,
+        description="select/select_one 的完整过滤表达式。示例：`it.PREPARE_ID == $ctx$.billStatement.prepareId`。使用 `it.FIELD` 引用 BO 字段，不要拆分为多个子字段。",
+    )
+    naming_sql_name: str | None = Field(
+        default=None,
+        description="fetch/fetch_one 的 namingSQL 名称。示例：`E_RT_QUERY_BY_OFFERINGID`。只填写名称，不要填写 id。",
+    )
+    params: List[FetchParamPlanNode] = Field(
+        default_factory=list,
+        description="fetch/fetch_one 的结构化参数列表。每项对应最终 DSL 的一个 `pair(param_name, value)`。",
+    )
+    field: str | None = Field(
+        default=None,
+        description="【内部兼容字段】旧版单字段过滤键，LLM 不应填写。",
+    )
+    bo_id: str | None = Field(
+        default=None,
+        description="【内部兼容字段】BO id，仅兼容旧链路，LLM 不应填写。",
+    )
+    data_source: str | None = Field(
+        default=None,
+        description="数据源标记。仅在系统已知且需要强校验时填写，通常可留空。",
+    )
+    naming_sql_id: str | None = Field(
+        default=None,
+        description="【内部兼容字段】namingSQL id，仅兼容旧链路，LLM 不应填写。",
+    )
+    filters: List[QueryFilterPlanNode] = Field(
+        default_factory=list,
+        description="【内部兼容字段】拆分过滤条件列表。优先使用 `filter_expr`。",
+    )
+    where: ExprPlanNode | None = Field(
+        default=None,
+        description="【内部兼容字段】过滤表达式 AST。优先使用 `filter_expr`。",
+    )
+    pairs: List[QueryPairPlanNode] = Field(
+        default_factory=list,
+        description="【内部兼容字段】拆分 pair 参数列表。优先使用 `params`。",
+    )
 
 
 class IfPlanNode(StrictModel):
-    type: Literal["if"]
-    condition: "ExprPlanNode"
-    then_expr: "ExprPlanNode"
-    else_expr: "ExprPlanNode"
+    type: Literal["if"] = Field(description="表达式节点类型，固定为 `if`。")
+    condition: "ExprPlanNode" = Field(description="if 条件表达式。")
+    then_expr: "ExprPlanNode" = Field(description="条件为真时返回的表达式。")
+    else_expr: "ExprPlanNode" = Field(description="条件为假时返回的表达式。")
 
 
 class BinaryOpPlanNode(StrictModel):
-    type: Literal["binary_op"]
-    operator: str
-    left: "ExprPlanNode"
-    right: "ExprPlanNode"
+    type: Literal["binary_op"] = Field(description="表达式节点类型，固定为 `binary_op`。")
+    operator: str = Field(description="二元操作符，例如 `==`、`and`、`+`。")
+    left: "ExprPlanNode" = Field(description="左操作数表达式。")
+    right: "ExprPlanNode" = Field(description="右操作数表达式。")
 
 
 class UnaryOpPlanNode(StrictModel):
-    type: Literal["unary_op"]
-    operator: str
-    operand: "ExprPlanNode"
+    type: Literal["unary_op"] = Field(description="表达式节点类型，固定为 `unary_op`。")
+    operator: str = Field(description="一元操作符，例如 `not`、`-`。")
+    operand: "ExprPlanNode" = Field(description="一元操作数表达式。")
 
 
 class FieldAccessPlanNode(StrictModel):
-    type: Literal["field_access"]
-    base: "ExprPlanNode"
-    field: str
+    type: Literal["field_access"] = Field(description="表达式节点类型，固定为 `field_access`。")
+    base: "ExprPlanNode" = Field(description="被取字段的基础表达式。")
+    field: str = Field(description="字段名。")
 
 
 class IndexAccessPlanNode(StrictModel):
-    type: Literal["index_access"]
-    base: "ExprPlanNode"
-    index: "ExprPlanNode"
+    type: Literal["index_access"] = Field(description="表达式节点类型，固定为 `index_access`。")
+    base: "ExprPlanNode" = Field(description="被索引的基础表达式。")
+    index: "ExprPlanNode" = Field(description="索引表达式。")
 
 
 class ListLiteralPlanNode(StrictModel):
-    type: Literal["list_literal"]
-    items: List["ExprPlanNode"] = Field(default_factory=list)
+    type: Literal["list_literal"] = Field(description="表达式节点类型，固定为 `list_literal`。")
+    items: List["ExprPlanNode"] = Field(default_factory=list, description="列表字面量中的元素表达式列表。")
 
 
 ExprPlanNode = Annotated[
