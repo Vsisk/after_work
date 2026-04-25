@@ -56,51 +56,54 @@ class ASTBuilder:
             return ExprNode(kind=ExprKind.VAR_REF, value=node.name)
 
         if isinstance(node, FunctionCallPlanNode):
-            function_name = node.function_name or node.function_id or ""
-            if node.function_id and node.function_id in registry.functions:
-                function_name = registry.functions[node.function_id].full_name
+            function_name = node.function_name or node.function_id
+            function = registry.functions.get(node.function_id) or registry.functions.get(function_name)
+            if function is not None:
+                function_name = function.full_name
+            else:
+                for function in registry.functions.values():
+                    if function.full_name == function_name or function.name == function_name or function.function_id == node.function_id:
+                        function_name = function.full_name
+                        break
             return ExprNode(
                 kind=ExprKind.FUNCTION_CALL,
                 value=function_name,
                 children=[self.build_expr_from_plan(argument, env) for argument in node.args],
-                metadata={"function_id": node.function_id},
+                metadata={},
             )
 
         if isinstance(node, QueryCallPlanNode):
             source_name = node.source_name
             query_kind = node.query_kind
-            if query_kind in {"select", "select_one"} and node.bo_id and node.bo_id in registry.bos:
+            if query_kind in {"select", "select_one"} and node.bo_id in registry.bos:
                 source_name = registry.bos[node.bo_id].bo_name
-            if query_kind in {"fetch", "fetch_one"} and node.bo_id and node.bo_id in registry.bos:
-                bo = registry.bos[node.bo_id]
-                matched_name = bo.naming_sql_name_by_key.get(str(node.naming_sql_id or "").strip())
-                if not matched_name and node.source_name:
-                    matched_name = bo.naming_sql_name_by_key.get(node.source_name)
-                if matched_name:
-                    source_name = matched_name
+            if query_kind in {"fetch", "fetch_one"} and node.bo_id and node.naming_sql_id:
+                bo = registry.bos.get(node.bo_id)
+                if bo is not None and node.naming_sql_id in bo.naming_sqls_by_id:
+                    source_name = bo.naming_sqls_by_id[node.naming_sql_id].naming_sql_name or source_name
             return ExprNode(
                 kind=ExprKind.QUERY_CALL,
                 value=source_name,
                 metadata={
                     "query_kind": query_kind,
-                    "target_field": node.field,
                     "bo_id": node.bo_id,
-                    "data_source": node.data_source,
                     "naming_sql_id": node.naming_sql_id,
-                    "where": self.build_expr_from_plan(node.where, env) if node.where else None,
+                    "target_field": node.field,
+                    "data_source": node.data_source,
+                    "where": self.build_expr_from_plan(node.filter_expr, env) if node.filter_expr else None,
                     "filters": [
                         {
-                            "field": query_filter.field,
-                            "value": self.build_expr_from_plan(query_filter.value, env),
+                            "field": pair.param_name,
+                            "value": self.build_expr_from_plan(pair.value_expr, env),
                         }
-                        for query_filter in node.filters
+                        for pair in node.filters
                     ],
                     "pairs": [
                         {
-                            "key": pair.key,
-                            "value": self.build_expr_from_plan(pair.value, env),
+                            "key": pair.param_name,
+                            "value": self.build_expr_from_plan(pair.value_expr, env),
                         }
-                        for pair in node.pairs
+                        for pair in node.params
                     ],
                 },
             )

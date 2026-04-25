@@ -12,6 +12,7 @@ from billing_dsl_agent.models import (
     ResourceRegistry,
     VisibleLocalContextSet,
 )
+from pydantic import ValidationError
 from billing_dsl_agent.plan_validator import (
     PlanValidator,
     compare_namingsql_param_type,
@@ -323,22 +324,24 @@ def test_definition_cycle_fails() -> None:
     assert any(item.code == "definition_cycle" for item in issues)
 
 
-def test_method_definition_is_reported_as_unsupported() -> None:
-    plan = _plan(
-        {
-            "definitions": [
-                {
-                    "kind": "method",
-                    "name": "format_title",
-                    "params": ["gender"],
-                    "body": {"type": "var_ref", "name": "gender"},
-                }
-            ],
-            "return_expr": {"type": "literal", "value": 1},
-        }
-    )
-    issues = PlanValidator(planner=None).validate(plan, _env()).issues
-    assert any(item.code == "unsupported_definition_kind" for item in issues)
+def test_method_definition_shape_is_rejected_by_schema() -> None:
+    try:
+        _plan(
+            {
+                "definitions": [
+                    {
+                        "kind": "method",
+                        "name": "format_title",
+                        "params": ["gender"],
+                        "body": {"type": "var_ref", "name": "gender"},
+                    }
+                ],
+                "return_expr": {"type": "literal", "value": 1},
+            }
+        )
+    except ValidationError:
+        return
+    raise AssertionError("method definition payload should be rejected")
 
 
 def test_compare_namingsql_param_type_ordered_match() -> None:

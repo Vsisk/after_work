@@ -1,0 +1,8 @@
+账期
+汇率
+币种
+账单
+billing cycle
+bill cycle
+currency rate
+exchange rate

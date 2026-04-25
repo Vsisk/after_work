@@ -2,7 +2,6 @@ from billing_dsl_agent.agent_entry import DSLAgent
 from billing_dsl_agent.environment import EnvironmentBuilder
 from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
 from billing_dsl_agent.models import GenerateDSLRequest, NodeDef
-from billing_dsl_agent.plan_validator import parse_program_plan_payload
 from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
 from billing_dsl_agent.resource_normalizer import ResourceNormalizer
 from billing_dsl_agent.semantic_selector import MockSemanticSelector
@@ -160,10 +159,7 @@ def _build_agent(plan_response: dict, repair_response: dict | None = None) -> DS
     loader = ResourceLoader(provider=provider)
     planner = LLMPlanner(
         StubOpenAIClient(
-            stage_responses={
-                "plan_base": _infer_base_plan_response(plan_response),
-                "plan_final": plan_response,
-            },
+            plan_response=plan_response,
             repair_response=repair_response,
         )
     )
@@ -181,143 +177,6 @@ def _build_filtered_env():
         user_query="generate title from customer gender",
         registry=registry,
     )
-
-
-def _iter_expr_nodes(payload):
-    if isinstance(payload, dict):
-        if isinstance(payload.get("type"), str):
-            yield payload
-        for value in payload.values():
-            yield from _iter_expr_nodes(value)
-    elif isinstance(payload, list):
-        for item in payload:
-            yield from _iter_expr_nodes(item)
-
-
-def _infer_return_shape(node_type: str | None) -> str:
-    return {
-        "literal": "literal_value",
-        "context_ref": "direct_ref",
-        "local_ref": "direct_ref",
-        "var_ref": "direct_ref",
-        "query_call": "query_result",
-        "function_call": "function_result",
-        "if": "conditional_result",
-        "list_literal": "list_result",
-        "index_access": "list_result",
-        "field_access": "object_field",
-    }.get(node_type or "", "unknown")
-
-
-def _context_path_aliases(path: str) -> set[str]:
-    aliases = {path}
-    if path.startswith("$ctx$.root."):
-        aliases.add("$ctx$." + path[len("$ctx$.root.") :])
-    elif path.startswith("$ctx$."):
-        aliases.add("$ctx$.root." + path[len("$ctx$.") :])
-    return aliases
-
-
-def _infer_base_plan_response(plan_response: dict) -> dict:
-    env = _build_filtered_env()
-    plan = parse_program_plan_payload(plan_response)
-    path_to_context_id = {
-        alias: item.resource_id
-        for item in env.selected_global_contexts
-        for alias in _context_path_aliases(item.path)
-    }
-    path_to_context_id.update({item.access_path: item.resource_id for item in env.visible_local_context.ordered_nodes})
-    bo_by_id = {item.resource_id: item for item in env.selected_bos}
-    function_ids = {item.resource_id for item in env.selected_functions}
-
-    node_types: list[str] = []
-    context_ids: list[str] = []
-    bo_ids: list[str] = []
-    referenced_function_ids: list[str] = []
-    query_kinds: list[str] = []
-    uses_condition = False
-
-    for node in _iter_expr_nodes(plan.model_dump(mode="python")):
-        node_type = node.get("type")
-        if not node_type:
-            continue
-        if node_type not in node_types:
-            node_types.append(node_type)
-        if node_type in {"context_ref", "local_ref"}:
-            resource_id = path_to_context_id.get(node.get("path"))
-            if resource_id and resource_id not in context_ids:
-                context_ids.append(resource_id)
-        if node_type == "query_call":
-            query_kind = node.get("query_kind")
-            if query_kind and query_kind not in query_kinds:
-                query_kinds.append(query_kind)
-            bo_id = node.get("bo_id")
-            if bo_id in bo_by_id and bo_id not in bo_ids:
-                bo_ids.append(bo_id)
-        if node_type == "function_call":
-            function_id = node.get("function_id")
-            if not function_id and node.get("function_name"):
-                function_id = f"function:{node['function_name']}"
-            if function_id in function_ids and function_id not in referenced_function_ids:
-                referenced_function_ids.append(function_id)
-        if node_type in {"if", "binary_op", "unary_op"}:
-            uses_condition = True
-
-    complexity = "low"
-    if "query_call" in node_types or "if" in node_types or len(plan.definitions) > 1:
-        complexity = "high"
-    elif plan.definitions or "function_call" in node_types or len(node_types) > 2:
-        complexity = "medium"
-
-    return {
-        "goal": "derive final program plan",
-        "required_resources": {
-            "context_refs": context_ids,
-            "bo_refs": [
-                {
-                    "bo_id": bo.resource_id,
-                    "bo_name": bo.bo_name,
-                    "field_ids": list(bo.field_ids),
-                    "naming_sql_ids": list(bo.naming_sql_ids),
-                    "data_source": bo.data_source,
-                    "available_query_kinds": [
-                        *(
-                            ["select_one", "select"]
-                            if bo.field_ids
-                            else []
-                        ),
-                        *(
-                            ["fetch_one", "fetch"]
-                            if bo.naming_sql_ids
-                            else []
-                        ),
-                    ],
-                }
-                for bo_id, bo in bo_by_id.items()
-                if bo_id in bo_ids
-            ],
-            "function_refs": referenced_function_ids,
-        },
-        "plan_shape": {
-            "needs_definitions": bool(plan.definitions),
-            "needs_query": "query_call" in node_types,
-            "needs_condition": uses_condition,
-            "needs_function_call": "function_call" in node_types,
-            "estimated_complexity": complexity,
-            "preferred_query_kinds": query_kinds,
-        },
-        "allowed_node_types": node_types or ["literal"],
-        "return_shape": _infer_return_shape(getattr(plan.return_expr, "type", None)),
-        "definition_hints": [
-            {
-                "name": definition.name,
-                "purpose": "intermediate computation",
-            }
-            for definition in plan.definitions
-        ],
-        "validation_notes": [],
-        "raw_reasoning_summary": "test-only inferred base plan",
-    }
 
 
 def test_loader_normalization_and_filtering_pipeline() -> None:
@@ -441,7 +300,7 @@ def test_generate_dsl_renders_program_defs_and_final_expression() -> None:
     ]
 
 
-def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
+def test_invalid_repair_result_stops_when_repair_makes_no_progress() -> None:
     invalid_plan = {
         "definitions": [
             {
@@ -461,7 +320,7 @@ def test_invalid_repair_result_does_not_fallback_to_legacy_plan() -> None:
     assert any(item.code == "undefined_var_ref" for item in response.validation.issues)
     assert any(item.code == "repair_no_progress" for item in response.validation.issues)
     assert response.debug is not None
-    assert len(response.debug.repair_attempts) == 2
+    assert len(response.debug.repair_attempts) == 1
 
 
 def test_select_one_supports_where_boolean_ast_render() -> None:

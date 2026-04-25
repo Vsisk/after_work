@@ -16,7 +16,6 @@ from billing_dsl_agent.models import (
     ResourceRegistry,
     ResourceSelectionDebug,
 )
-from billing_dsl_agent.resource_manager import ResourceManager
 from billing_dsl_agent.semantic_selector import CandidateSummary, MockSemanticSelector, SemanticSelector, SelectionResult
 
 logger = get_logger(__name__)
@@ -25,7 +24,8 @@ logger = get_logger(__name__)
 @dataclass(slots=True)
 class EnvironmentBuilder:
     semantic_selector: SemanticSelector = field(default_factory=MockSemanticSelector)
-    resource_manager: ResourceManager = field(default_factory=ResourceManager)
+    resource_manager: Any = None
+    max_candidates_per_type: int = 20
 
     def build_filtered_environment(self, node_info: NodeDef, user_query: str, registry: ResourceRegistry) -> FilteredEnvironment:
         logger.info(
@@ -34,12 +34,7 @@ class EnvironmentBuilder:
             node_info.node_path,
             user_query,
         )
-        working_registry = ResourceRegistry(
-            contexts=dict(registry.contexts),
-            bos=dict(registry.bos),
-            functions=dict(registry.functions),
-            edsl_tree=dict(registry.edsl_tree),
-        )
+        working_registry = registry
 
         resolved_local_contexts = resolve_visible_local_contexts(working_registry.edsl_tree, node_info.node_path)
         visible_local_context = normalize_local_contexts(resolved_local_contexts)
@@ -60,7 +55,7 @@ class EnvironmentBuilder:
 
         eligible_global_contexts = self._eligible_global_contexts(node_info, user_query, working_registry)
         eligible_bos = self._eligible_bos(node_info, user_query, working_registry)
-        eligible_functions = dict(working_registry.functions)
+        eligible_functions = working_registry.functions
         logger.info(
             "environment_eligibility_completed eligible_global_contexts=%s eligible_bos=%s eligible_functions=%s",
             len(eligible_global_contexts),
@@ -68,28 +63,10 @@ class EnvironmentBuilder:
             len(eligible_functions),
         )
 
-        indexes = self.resource_manager.build_indexes(
-            context_registry_or_vars=list(eligible_global_contexts.values()),
-            bo_registry_or_list=list(eligible_bos.values()),
-            function_registry_or_list=list(eligible_functions.values()),
-        )
-        candidate_set = self.resource_manager.select_candidates(
-            user_query=user_query,
-            node_def=node_info,
-            indexes=indexes,
-        )
-        logger.info(
-            "candidate_recall_completed context_candidates=%s bo_candidates=%s function_candidates=%s",
-            len(candidate_set.context_candidates),
-            len(candidate_set.bo_candidates),
-            len(candidate_set.function_candidates),
-        )
-
         global_context_selection = self._select_global_contexts(
             node_info=node_info,
             user_query=user_query,
             eligible_contexts=eligible_global_contexts,
-            candidate_set=candidate_set,
         )
         global_context_selection.selected_ids = self._augment_global_context_ids(
             global_context_selection.selected_ids,
@@ -99,13 +76,11 @@ class EnvironmentBuilder:
             node_info=node_info,
             user_query=user_query,
             eligible_bos=eligible_bos,
-            candidate_set=candidate_set,
         )
         function_selection = self._select_functions(
             node_info=node_info,
             user_query=user_query,
             functions=eligible_functions,
-            candidate_set=candidate_set,
         )
 
         selected_global_contexts = self._resolve_contexts(global_context_selection.selected_ids, eligible_global_contexts)
@@ -143,88 +118,54 @@ class EnvironmentBuilder:
         node_info: NodeDef,
         user_query: str,
         eligible_contexts: Dict[str, ContextResource],
-        candidate_set: Any,
     ) -> SelectionResult:
-        path_to_context = {item.path: item for item in eligible_contexts.values()}
         candidates = [
             CandidateSummary(
                 resource_id=resource.resource_id,
-                description=f"{resource.name} {resource.description} {resource.path}",
+                description=self._short_text(resource.name, resource.description, resource.path),
                 tags=[resource.domain, *resource.tags],
             )
-            for item in candidate_set.context_candidates
-            if (resource := path_to_context.get(item.path)) is not None
+            for resource in list(eligible_contexts.values())[: self.max_candidates_per_type]
         ]
-        if not candidates:
-            candidates = [
-                CandidateSummary(
-                    resource_id=resource.resource_id,
-                    description=f"{resource.name} {resource.description} {resource.path}",
-                    tags=[resource.domain, *resource.tags],
-                )
-                for resource in eligible_contexts.values()
-            ]
-        return self.semantic_selector.select_with_debug("context", node_info, user_query, candidates)
+        selection = self.semantic_selector.select_with_debug("context", node_info, user_query, candidates)
+        selection.debug_info = {"resource_type": "context"}
+        return selection
 
     def _select_bos(
         self,
         node_info: NodeDef,
         user_query: str,
         eligible_bos: Dict[str, BOResource],
-        candidate_set: Any,
     ) -> SelectionResult:
-        bo_name_to_resource = {item.bo_name: item for item in eligible_bos.values()}
         candidates = [
             CandidateSummary(
                 resource_id=resource.resource_id,
-                description=f"{resource.bo_name} {resource.description} fields={' '.join(resource.field_ids)} datasource={resource.data_source}",
-                tags=[resource.scope, resource.data_source, *resource.tags],
+                description=self._short_text(
+                    resource.bo_name,
+                    resource.description,
+                    "datasource=" + getattr(resource, "data_source", resource.scope),
+                ),
+                tags=[resource.scope, getattr(resource, "data_source", resource.scope), *resource.tags],
             )
-            for item in candidate_set.bo_candidates
-            if (resource := bo_name_to_resource.get(item.bo_name)) is not None
+            for resource in list(eligible_bos.values())[: self.max_candidates_per_type]
         ]
-        if not candidates:
-            candidates = [
-                CandidateSummary(
-                    resource_id=resource.resource_id,
-                    description=f"{resource.bo_name} {resource.description} fields={' '.join(resource.field_ids)} datasource={resource.data_source}",
-                    tags=[resource.scope, resource.data_source, *resource.tags],
-                )
-                for resource in eligible_bos.values()
-            ]
-        return self.semantic_selector.select_with_debug("bo", node_info, user_query, candidates)
+        selection = self.semantic_selector.select_with_debug("bo", node_info, user_query, candidates)
+        selection.debug_info = {"resource_type": "bo"}
+        return selection
 
     def _select_functions(
         self,
         node_info: NodeDef,
         user_query: str,
         functions: Dict[str, FunctionResource],
-        candidate_set: Any,
     ) -> SelectionResult:
-        function_by_full_name = {item.full_name: item for item in functions.values()}
-        function_by_function_id = {item.function_id: item for item in functions.values()}
-        candidates = []
-        for item in candidate_set.function_candidates:
-            resource = function_by_full_name.get(item.full_name) or function_by_function_id.get(item.function_id)
-            if resource is None:
-                continue
-            candidates.append(
-                CandidateSummary(
-                    resource_id=resource.resource_id,
-                    description=f"{resource.function_id} {resource.full_name} {resource.description} {resource.signature_display} return={resource.return_type}",
-                    tags=[resource.scope, *resource.params, *resource.tags],
-                )
-            )
-        if not candidates:
-            candidates = [
-                CandidateSummary(
-                    resource_id=resource.resource_id,
-                    description=f"{resource.function_id} {resource.full_name} {resource.description} {resource.signature_display} return={resource.return_type}",
-                    tags=[resource.scope, *resource.params, *resource.tags],
-                )
-                for resource in functions.values()
-            ]
-        return self.semantic_selector.select_with_debug("function", node_info, user_query, candidates)
+        candidates = [
+            self._function_candidate_summary(resource)
+            for resource in list(functions.values())[: self.max_candidates_per_type]
+        ]
+        selection = self.semantic_selector.select_with_debug("function", node_info, user_query, candidates)
+        selection.debug_info = {"resource_type": "function"}
+        return selection
 
     def _eligible_global_contexts(
         self,
@@ -234,7 +175,8 @@ class EnvironmentBuilder:
     ) -> Dict[str, ContextResource]:
         global_contexts = {key: value for key, value in registry.contexts.items() if value.scope == "global"}
         domains = self._recall_domains(node_info, user_query, {c.domain for c in global_contexts.values()})
-        return {key: value for key, value in global_contexts.items() if value.domain in domains}
+        filtered = {key: value for key, value in global_contexts.items() if value.domain in domains}
+        return filtered or global_contexts
 
     def _eligible_bos(
         self,
@@ -242,16 +184,21 @@ class EnvironmentBuilder:
         user_query: str,
         registry: ResourceRegistry,
     ) -> Dict[str, BOResource]:
-        bos = dict(registry.bos)
+        bos = registry.bos
         if node_info.is_ab and node_info.ab_data_sources:
             allowed = set(node_info.ab_data_sources)
-            return {key: value for key, value in bos.items() if value.data_source in allowed}
+            return {
+                key: value
+                for key, value in bos.items()
+                if getattr(value, "data_source", value.scope) in allowed
+            }
 
         if node_info.is_ab:
             return bos
 
         domains = self._recall_domains(node_info, user_query, {bo.domain for bo in bos.values()})
-        return {key: value for key, value in bos.items() if value.domain in domains}
+        filtered = {key: value for key, value in bos.items() if value.domain in domains}
+        return filtered or bos
 
     def _resolve_contexts(
         self,
@@ -270,20 +217,48 @@ class EnvironmentBuilder:
     ) -> List[FunctionResource]:
         return [functions[item] for item in selected_ids if item in functions]
 
-    def _build_selection_debug(self, resource_type: str, selection: SelectionResult) -> ResourceSelectionDebug:
+    def _build_selection_debug(
+        self,
+        resource_type: str,
+        selection: SelectionResult,
+    ) -> ResourceSelectionDebug:
         return ResourceSelectionDebug(
             resource_type=resource_type,
-            strategy="rule_recall_plus_llm",
+            strategy="id_summary_plus_selector",
             candidate_ids=list(selection.candidate_ids),
             selected_ids=list(selection.selected_ids),
             fallback_used=selection.fallback_used,
             llm_errors=list(selection.llm_errors),
+            retrieval_debug=dict(selection.debug_info),
         )
 
     def _recall_domains(self, node_info: NodeDef, user_query: str, domains: set[str]) -> set[str]:
         text = f"{node_info.node_name} {node_info.node_path} {node_info.description} {user_query}".lower()
         selected = {domain for domain in domains if domain.lower() in text}
         return selected or set(domains)
+
+    def _function_candidate_summary(self, resource: FunctionResource) -> CandidateSummary:
+        function_id = getattr(resource, "function_id", resource.resource_id)
+        full_name = getattr(resource, "full_name", getattr(resource, "function_name", resource.name))
+        description = getattr(resource, "description", getattr(resource, "function_name_zh", resource.name))
+        signature_display = getattr(resource, "signature_display", "")
+        return CandidateSummary(
+            resource_id=resource.resource_id,
+            description=self._short_text(
+                function_id,
+                full_name,
+                description,
+                signature_display,
+                f"return={resource.return_type}",
+            ),
+            tags=[resource.scope, *resource.params, *resource.tags],
+        )
+
+    def _short_text(self, *parts: str, limit: int = 220) -> str:
+        text = " ".join(part.strip() for part in parts if part and part.strip())
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
 
     def _augment_global_context_ids(
         self,

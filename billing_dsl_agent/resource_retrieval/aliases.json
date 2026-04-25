@@ -1,0 +1,6 @@
+{
+  "账期": ["bill cycle", "billing cycle", "billcycle", "cycle"],
+  "汇率": ["currency rate", "exchange rate", "rate"],
+  "prepareId": ["prepare id", "prepare_id"],
+  "billCycleId": ["bill cycle id", "bill_cycle_id"]
+}

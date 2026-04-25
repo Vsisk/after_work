@@ -5,27 +5,20 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pydantic import ValidationError
-
 from billing_dsl_agent.log_utils import dumps_for_log, get_logger
 from billing_dsl_agent.models import (
     BinaryOpPlanNode,
     ContextRefPlanNode,
-    DefinitionNode,
     ExprPlanNode,
     FilteredEnvironment,
     FunctionCallPlanNode,
     IfPlanNode,
     IndexAccessPlanNode,
-    LegacyPlanDraft,
     ListLiteralPlanNode,
     LocalRefPlanNode,
-    MethodDefinitionNode,
     ProgramPlan,
     ProgramPlanLimits,
     QueryCallPlanNode,
-    QueryFilterPlanNode,
-    QueryPairPlanNode,
     UnaryOpPlanNode,
     ValidationIssue,
     ValidationResult,
@@ -180,17 +173,6 @@ def validate_program_plan_structure(
 
     for index, definition in enumerate(definitions):
         def_path = f"definitions[{index}]"
-        if definition.kind == "method":
-            issues.append(
-                issue(
-                    "unsupported_definition_kind",
-                    "method definitions are not supported yet",
-                    f"{def_path}.kind",
-                )
-            )
-            continue
-
-        assert isinstance(definition, VariableDefinitionNode)
         name = definition.name
         name_path = f"{def_path}.name"
         if not IDENTIFIER_RE.match(name):
@@ -240,10 +222,7 @@ def validate_program_plan_structure(
             )
         )
 
-    total_nodes = sum(
-        count_expr_nodes(definition.expr) if isinstance(definition, VariableDefinitionNode) else count_expr_nodes(definition.body)
-        for definition in definitions
-    ) + count_expr_nodes(plan.return_expr)
+    total_nodes = sum(count_expr_nodes(definition.expr) for definition in definitions) + count_expr_nodes(plan.return_expr)
     if total_nodes > config.max_total_expr_nodes:
         issues.append(
             issue(
@@ -253,10 +232,7 @@ def validate_program_plan_structure(
             )
         )
 
-    total_if_nodes = sum(
-        count_if_nodes(definition.expr) if isinstance(definition, VariableDefinitionNode) else count_if_nodes(definition.body)
-        for definition in definitions
-    ) + count_if_nodes(plan.return_expr)
+    total_if_nodes = sum(count_if_nodes(definition.expr) for definition in definitions) + count_if_nodes(plan.return_expr)
     if total_if_nodes > config.max_if_nodes_total:
         issues.append(
             issue(
@@ -297,8 +273,6 @@ def validate_program_plan_semantics(
     for index, definition in enumerate(plan.definitions):
         if isinstance(definition, VariableDefinitionNode):
             issues.extend(_validate_expr_semantics(definition.expr, env, f"definitions[{index}].expr"))
-        elif isinstance(definition, MethodDefinitionNode):
-            issues.extend(_validate_expr_semantics(definition.body, env, f"definitions[{index}].body"))
     issues.extend(_validate_expr_semantics(plan.return_expr, env, "return_expr"))
     return _dedupe_issues(issues)
 
@@ -336,56 +310,35 @@ def _validate_expr_semantics(
         if expr.query_kind in {"select", "select_one"}:
             bo_id, bo = _resolve_bo(expr, env)
             if bo is None or bo_id is None:
-                issues.append(issue("unknown_bo_ref", f"unknown BO ref: {expr.bo_id or expr.source_name}", path))
+                issues.append(issue("unknown_bo_ref", f"unknown BO ref: {expr.source_name}", path))
             else:
                 if bo_id not in filtered_bos:
                     issues.append(issue("bo_not_in_filtered_environment", f"bo not in filtered environment: {bo_id}", path))
-                if expr.field and not _bo_has_field(bo, expr.field):
-                    issues.append(issue("unknown_bo_field", f"unknown BO field: {expr.field}", f"{path}.field"))
-                if expr.data_source and bo.data_source and expr.data_source != bo.data_source:
-                    issues.append(issue("bo_data_source_mismatch", f"bo data source mismatch: {bo_id}", f"{path}.data_source"))
-                if expr.naming_sql_id and not _bo_has_naming_sql(bo, expr.naming_sql_id):
-                    issues.append(issue("unknown_naming_sql", f"unknown naming sql id: {expr.naming_sql_id}", f"{path}.naming_sql_id"))
-                for filter_index, query_filter in enumerate(expr.filters):
-                    if not _bo_has_field(bo, query_filter.field):
-                        issues.append(
-                            issue(
-                                "unknown_bo_field",
-                                f"unknown BO field: {query_filter.field}",
-                                f"{path}.filters[{filter_index}].field",
-                            )
-                        )
-                if expr.where is not None:
-                    issues.extend(_validate_where_expr(expr.where, bo, env, f"{path}.where"))
+                if expr.filter_expr is not None:
+                    issues.extend(_validate_where_expr(expr.filter_expr, bo, env, f"{path}.filter_expr"))
         elif expr.query_kind in {"fetch", "fetch_one"}:
             resolved_matches = _resolve_naming_sql_matches(expr, env)
             if not resolved_matches:
                 issues.append(
                     issue(
                         "unknown_naming_sql",
-                        f"unknown naming sql for query: {expr.naming_sql_id or expr.source_name}",
-                        f"{path}.naming_sql_id",
+                        f"unknown naming sql for query: {expr.source_name}",
+                        f"{path}.source_name",
                     )
                 )
             elif len(resolved_matches) > 1:
                 issues.append(
                     issue(
                         "ambiguous_naming_sql",
-                        f"ambiguous naming sql for query: {expr.naming_sql_id or expr.source_name}",
-                        f"{path}.naming_sql_id",
+                        f"ambiguous naming sql for query: {expr.source_name}",
+                        f"{path}.source_name",
                     )
                 )
             else:
                 resolved_bo_id, resolved_bo, naming_sql = resolved_matches[0]
                 if resolved_bo_id not in filtered_bos:
                     issues.append(issue("bo_not_in_filtered_environment", f"bo not in filtered environment: {resolved_bo_id}", path))
-                if expr.data_source and resolved_bo.data_source and expr.data_source != resolved_bo.data_source:
-                    issues.append(
-                        issue("bo_data_source_mismatch", f"bo data source mismatch: {resolved_bo_id}", f"{path}.data_source")
-                    )
-                actual_keys = [pair.key for pair in expr.pairs if str(pair.key or "").strip()]
-                if not actual_keys and expr.filters:
-                    actual_keys = [flt.field for flt in expr.filters if str(flt.field or "").strip()]
+                actual_keys = [pair.param_name for pair in expr.params if str(pair.param_name or "").strip()]
                 expected_params = list(getattr(naming_sql, "params", []) or [])
                 expected = [str(getattr(item, "param_name", "") or "").strip() for item in expected_params if str(getattr(item, "param_name", "") or "").strip()]
                 if set(expected) != set(actual_keys) or len(expected) != len(actual_keys):
@@ -393,11 +346,11 @@ def _validate_expr_semantics(
                         issue(
                             "naming_sql_param_mismatch",
                             f"naming sql params mismatch for {getattr(naming_sql, 'naming_sql_name', '')}: expected={expected}, actual={actual_keys}",
-                            f"{path}.pairs",
+                            f"{path}.params",
                         )
                     )
                 expected_map = {str(getattr(param, "param_name", "") or ""): param for param in expected_params}
-                actual_pairs_by_name = {str(pair.key or ""): pair for pair in expr.pairs if str(pair.key or "").strip()}
+                actual_pairs_by_name = {str(pair.param_name or ""): pair for pair in expr.params if str(pair.param_name or "").strip()}
                 for expected_name, expected_param in expected_map.items():
                     expected_ref = getattr(expected_param, "normalized_type_ref", None)
                     if expected_ref is None:
@@ -405,7 +358,7 @@ def _validate_expr_semantics(
                             issue(
                                 "naming_sql_param_signature_missing",
                                 f"naming sql param signature missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
-                                f"{path}.pairs",
+                                f"{path}.params",
                                 severity="warning",
                             )
                         )
@@ -415,7 +368,7 @@ def _validate_expr_semantics(
                             issue(
                                 "naming_sql_param_data_type_missing",
                                 f"naming sql expected data_type missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
-                                f"{path}.pairs",
+                                f"{path}.params",
                                 severity="warning",
                             )
                         )
@@ -424,7 +377,7 @@ def _validate_expr_semantics(
                             issue(
                                 "naming_sql_param_data_type_name_missing",
                                 f"naming sql expected data_type_name missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
-                                f"{path}.pairs",
+                                f"{path}.params",
                                 severity="warning",
                             )
                         )
@@ -433,20 +386,20 @@ def _validate_expr_semantics(
                             issue(
                                 "naming_sql_param_is_list_missing",
                                 f"naming sql expected is_list missing for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
-                                f"{path}.pairs",
+                                f"{path}.params",
                                 severity="warning",
                             )
                         )
                     actual_pair = actual_pairs_by_name.get(expected_name)
                     if actual_pair is None:
                         continue
-                    actual_type = _infer_naming_sql_expr_type(actual_pair.value, env)
+                    actual_type = _infer_naming_sql_expr_type(actual_pair.value_expr, env)
                     if getattr(actual_type, "is_unknown", True):
                         issues.append(
                             issue(
                                 "naming_sql_param_actual_type_unresolved",
                                 f"naming sql actual type unresolved for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}",
-                                f"{path}.pairs",
+                                f"{path}.params",
                                 severity="warning",
                             )
                         )
@@ -460,27 +413,21 @@ def _validate_expr_semantics(
                                     f"naming sql param type mismatch for {getattr(naming_sql, 'naming_sql_name', '')}.{expected_name}: "
                                     f"{match_result.reason}"
                                 ),
-                                f"{path}.pairs",
+                                f"{path}.params",
                             )
                         )
         else:
             issues.append(issue("invalid_query_shape", f"unsupported query kind: {expr.query_kind}", f"{path}.query_kind"))
-        for filter_index, query_filter in enumerate(expr.filters):
-            issues.extend(
-                _validate_expr_semantics(
-                    query_filter.value,
-                    env,
-                    f"{path}.filters[{filter_index}].value",
-                )
-            )
-        for pair_index, pair in enumerate(expr.pairs):
-            issues.extend(_validate_expr_semantics(pair.value, env, f"{path}.pairs[{pair_index}].value"))
+        if expr.filter_expr is not None:
+            issues.extend(_validate_expr_semantics(expr.filter_expr, env, f"{path}.filter_expr"))
+        for pair_index, pair in enumerate(expr.params):
+            issues.extend(_validate_expr_semantics(pair.value_expr, env, f"{path}.params[{pair_index}].value_expr"))
         return issues
 
     if isinstance(expr, FunctionCallPlanNode):
         function_id, function = _resolve_function(expr, env)
         if function is None or function_id is None:
-            issues.append(issue("unknown_function_ref", f"unknown function ref: {expr.function_id or expr.function_name}", path))
+            issues.append(issue("unknown_function_ref", f"unknown function ref: {expr.function_name}", path))
         else:
             if function_id not in filtered_functions:
                 issues.append(issue("function_not_in_filtered_environment", f"function not in filtered environment: {function_id}", path))
@@ -632,8 +579,6 @@ def build_definition_dependency_graph(plan: ProgramPlan) -> dict[str, set[str]]:
     for definition in plan.definitions:
         if isinstance(definition, VariableDefinitionNode):
             graph[definition.name] = {ref for ref in collect_var_refs(definition.expr) if ref in definition_names}
-        elif isinstance(definition, MethodDefinitionNode):
-            graph[definition.name] = {ref for ref in collect_var_refs(definition.body) if ref in definition_names}
     return graph
 
 
@@ -661,288 +606,14 @@ def detect_definition_cycles(plan: ProgramPlan) -> list[list[str]]:
     return cycles
 
 
-def adapt_legacy_plan(raw_plan: LegacyPlanDraft | dict[str, Any]) -> ProgramPlan:
-    raw_dict = raw_plan.model_dump(mode="python") if isinstance(raw_plan, LegacyPlanDraft) else dict(raw_plan)
-    if "expr_tree" in raw_dict:
-        expr_payload = _normalize_legacy_expr_tree(raw_dict["expr_tree"])
-        return ProgramPlan.model_validate(
-            {
-                "definitions": [],
-                "return_expr": expr_payload,
-                "raw_plan": raw_dict.get("raw_plan") or raw_dict,
-            }
-        )
-
-    legacy = raw_plan if isinstance(raw_plan, LegacyPlanDraft) else LegacyPlanDraft.model_validate(raw_dict)
-    return ProgramPlan(
-        definitions=[],
-        return_expr=_legacy_plan_to_expr(legacy),
-        raw_plan=legacy.raw_plan or raw_dict,
-        legacy_plan=legacy,
-    )
-
-
-def _legacy_plan_to_expr(plan: LegacyPlanDraft) -> ExprPlanNode:
-    pattern = plan.expression_pattern
-    if pattern == "if":
-        cond_ref = str(plan.semantic_slots.get("condition_ref") or (plan.context_refs[0] if plan.context_refs else ""))
-        return IfPlanNode(
-            type="if",
-            condition=BinaryOpPlanNode(
-                type="binary_op",
-                operator=str(plan.semantic_slots.get("condition_operator") or "=="),
-                left=_legacy_scalar_to_expr(cond_ref),
-                right=LiteralPlanNode(type="literal", value=plan.semantic_slots.get("condition_value")),
-            ),
-            then_expr=LiteralPlanNode(type="literal", value=plan.semantic_slots.get("true_output")),
-            else_expr=LiteralPlanNode(type="literal", value=plan.semantic_slots.get("false_output")),
-        )
-
-    if pattern in {"select", "select_one", "fetch", "fetch_one"} and plan.bo_refs:
-        bo_ref = plan.bo_refs[0]
-        bo_id = str(bo_ref.get("bo_id") or "").strip() or None
-        field_id = str(bo_ref.get("field_id") or "").strip()
-        naming_sql_id = str(bo_ref.get("naming_sql_id") or "").strip() or None
-        source_name = _bo_name_from_identifier(bo_id or "")
-        if pattern in {"fetch", "fetch_one"} and naming_sql_id:
-            source_name = _suffix_name(naming_sql_id)
-        return QueryCallPlanNode(
-            type="query_call",
-            query_kind=pattern,
-            source_name=source_name,
-            field=_field_name_from_identifier(field_id) if field_id else None,
-            bo_id=bo_id,
-            data_source=str(bo_ref.get("data_source") or "").strip() or None,
-            naming_sql_id=naming_sql_id,
-            filters=[
-                QueryFilterPlanNode(
-                    field=str(param.get("param_name") or "").strip(),
-                    value=_legacy_param_to_expr(param),
-                )
-                for param in bo_ref.get("params") or []
-            ],
-            pairs=[
-                QueryPairPlanNode(
-                    key=str(param.get("param_name") or "").strip(),
-                    value=_legacy_param_to_expr(param),
-                )
-                for param in bo_ref.get("params") or []
-            ],
-        )
-
-    if pattern == "function_call" and plan.function_refs:
-        function_id = str(plan.function_refs[0] or "").strip() or None
-        return FunctionCallPlanNode(
-            type="function_call",
-            function_name=_function_name_from_identifier(function_id or ""),
-            function_id=function_id,
-            args=[_legacy_scalar_to_expr(value) for value in plan.semantic_slots.get("function_args", [])],
-        )
-
-    if plan.context_refs:
-        return _legacy_scalar_to_expr(plan.context_refs[0])
-
-    return LiteralPlanNode(type="literal", value=plan.semantic_slots.get("literal"))
-
-
-def _legacy_param_to_expr(param: dict[str, Any]) -> ExprPlanNode:
-    source_type = str(param.get("value_source_type") or "").strip()
-    value = param.get("value")
-    if source_type == "constant":
-        return LiteralPlanNode(type="literal", value=value)
-    return _legacy_scalar_to_expr(value)
-
-
-def _legacy_scalar_to_expr(value: Any) -> ExprPlanNode:
-    if isinstance(value, dict):
-        if "type" in value or "kind" in value:
-            payload = _normalize_legacy_expr_tree(value)
-            return _validate_expr_payload(payload)
-        raise ValueError("unsupported legacy scalar dict")
-    if isinstance(value, str):
-        if value.startswith("context:"):
-            return ContextRefPlanNode(type="context_ref", path=value.split("context:", 1)[1])
-        if value.startswith("local:"):
-            return LocalRefPlanNode(type="local_ref", path=value.split("local:", 1)[1])
-        if value.startswith("$ctx$."):
-            return ContextRefPlanNode(type="context_ref", path=value)
-        if value.startswith("$local$."):
-            return LocalRefPlanNode(type="local_ref", path=value)
-    return LiteralPlanNode(type="literal", value=value)
-
-
-def _normalize_legacy_expr_tree(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ValueError("expr_tree must be an object")
-    if "type" in payload:
-        node_type = str(payload.get("type") or "").strip()
-        if node_type == "query_call":
-            return {
-                **payload,
-                "filters": [
-                    {
-                        "field": item.get("field"),
-                        "value": _normalize_legacy_expr_tree(item.get("value"))
-                        if isinstance(item.get("value"), dict)
-                        else _legacy_scalar_to_expr(item.get("value")).model_dump(mode="python"),
-                    }
-                    for item in payload.get("filters") or []
-                ],
-            }
-        if node_type == "function_call":
-            return {
-                **payload,
-                "args": [
-                    _normalize_legacy_expr_tree(item) if isinstance(item, dict) else _legacy_scalar_to_expr(item).model_dump(mode="python")
-                    for item in payload.get("args") or []
-                ],
-            }
-        if node_type == "if":
-            return {
-                **payload,
-                "condition": _normalize_legacy_expr_tree(payload.get("condition")),
-                "then_expr": _normalize_legacy_expr_tree(payload.get("then_expr")),
-                "else_expr": _normalize_legacy_expr_tree(payload.get("else_expr")),
-            }
-        if node_type == "binary_op":
-            return {
-                **payload,
-                "left": _normalize_legacy_expr_tree(payload.get("left")),
-                "right": _normalize_legacy_expr_tree(payload.get("right")),
-            }
-        if node_type == "unary_op":
-            return {
-                **payload,
-                "operand": _normalize_legacy_expr_tree(payload.get("operand")),
-            }
-        if node_type == "field_access":
-            return {
-                **payload,
-                "base": _normalize_legacy_expr_tree(payload.get("base")),
-            }
-        if node_type == "index_access":
-            return {
-                **payload,
-                "base": _normalize_legacy_expr_tree(payload.get("base")),
-                "index": _normalize_legacy_expr_tree(payload.get("index")),
-            }
-        if node_type == "list_literal":
-            return {
-                **payload,
-                "items": [
-                    _normalize_legacy_expr_tree(item) if isinstance(item, dict) else _legacy_scalar_to_expr(item).model_dump(mode="python")
-                    for item in payload.get("items") or []
-                ],
-            }
-        return payload
-    kind = str(payload.get("kind") or "").strip().upper()
-    children = payload.get("children") or []
-    metadata = payload.get("metadata") or {}
-    value = payload.get("value")
-
-    if kind == "LITERAL":
-        return {"type": "literal", "value": value}
-    if kind == "CONTEXT_REF":
-        return {"type": "context_ref", "path": value}
-    if kind == "LOCAL_REF":
-        return {"type": "local_ref", "path": value}
-    if kind == "VAR_REF":
-        return {"type": "var_ref", "name": value}
-    if kind == "FUNCTION_CALL":
-        return {
-            "type": "function_call",
-            "function_name": value,
-            "args": [_normalize_legacy_expr_tree(child) for child in children],
-        }
-    if kind == "QUERY_CALL":
-        params = metadata.get("params") or []
-        filters = metadata.get("filters") or [
-            {
-                "field": param.get("param_name"),
-                "value": _legacy_param_to_expr(param).model_dump(mode="python"),
-            }
-            for param in params
-        ]
-        return {
-            "type": "query_call",
-            "query_kind": metadata.get("query_kind") or metadata.get("query_mode") or "select",
-            "source_name": value,
-            "field": metadata.get("target_field") or metadata.get("field"),
-            "bo_id": metadata.get("bo_id"),
-            "data_source": metadata.get("data_source"),
-            "naming_sql_id": metadata.get("naming_sql_id"),
-            "filters": [
-                {
-                    "field": item.get("field"),
-                    "value": _normalize_legacy_expr_tree(item.get("value")) if isinstance(item.get("value"), dict) else _legacy_scalar_to_expr(item.get("value")).model_dump(mode="python"),
-                }
-                for item in filters
-            ],
-            "where": _normalize_legacy_expr_tree(metadata.get("where")) if isinstance(metadata.get("where"), dict) else None,
-            "pairs": [
-                {
-                    "key": item.get("key") or item.get("field"),
-                    "value": _normalize_legacy_expr_tree(item.get("value"))
-                    if isinstance(item.get("value"), dict)
-                    else _legacy_scalar_to_expr(item.get("value")).model_dump(mode="python"),
-                }
-                for item in (metadata.get("pairs") or [])
-                if isinstance(item, dict)
-            ],
-        }
-    if kind == "IF_EXPR":
-        return {
-            "type": "if",
-            "condition": _normalize_legacy_expr_tree(children[0]),
-            "then_expr": _normalize_legacy_expr_tree(children[1]),
-            "else_expr": _normalize_legacy_expr_tree(children[2]),
-        }
-    if kind == "BINARY_OP":
-        return {
-            "type": "binary_op",
-            "operator": value,
-            "left": _normalize_legacy_expr_tree(children[0]),
-            "right": _normalize_legacy_expr_tree(children[1]),
-        }
-    if kind == "UNARY_OP":
-        return {
-            "type": "unary_op",
-            "operator": value,
-            "operand": _normalize_legacy_expr_tree(children[0]),
-        }
-    if kind == "FIELD_ACCESS":
-        return {
-            "type": "field_access",
-            "base": _normalize_legacy_expr_tree(children[0]),
-            "field": value,
-        }
-    if kind == "INDEX_ACCESS":
-        return {
-            "type": "index_access",
-            "base": _normalize_legacy_expr_tree(children[0]),
-            "index": _normalize_legacy_expr_tree(children[1]),
-        }
-    if kind == "LIST_LITERAL":
-        return {
-            "type": "list_literal",
-            "items": [_normalize_legacy_expr_tree(child) for child in children],
-        }
-    raise ValueError(f"unsupported legacy expr_tree kind: {kind or '<empty>'}")
-
-
-def _validate_expr_payload(payload: dict[str, Any]) -> ExprPlanNode:
-    wrapper = ProgramPlan.model_validate({"definitions": [], "return_expr": payload})
-    return wrapper.return_expr
-
-
 def _child_expressions(node: ExprPlanNode) -> list[ExprPlanNode]:
     if isinstance(node, FunctionCallPlanNode):
         return list(node.args)
     if isinstance(node, QueryCallPlanNode):
-        children = [query_filter.value for query_filter in node.filters]
-        if node.where is not None:
-            children.append(node.where)
-        children.extend([pair.value for pair in node.pairs])
+        children = []
+        if node.filter_expr is not None:
+            children.append(node.filter_expr)
+        children.extend([pair.value_expr for pair in node.params])
         return children
     if isinstance(node, IfPlanNode):
         return [node.condition, node.then_expr, node.else_expr]
@@ -983,6 +654,8 @@ def _resolve_bo(expr: QueryCallPlanNode, env: FilteredEnvironment) -> tuple[str 
     registry = env.registry
     if expr.bo_id and expr.bo_id in registry.bos:
         return expr.bo_id, registry.bos[expr.bo_id]
+    if expr.source_name and expr.source_name in registry.bos:
+        return expr.source_name, registry.bos[expr.source_name]
     for bo_id, bo in registry.bos.items():
         if bo.bo_name == expr.source_name:
             return bo_id, bo
@@ -993,6 +666,8 @@ def _resolve_function(expr: FunctionCallPlanNode, env: FilteredEnvironment) -> t
     registry = env.registry
     if expr.function_id and expr.function_id in registry.functions:
         return expr.function_id, registry.functions[expr.function_id]
+    if expr.function_name and expr.function_name in registry.functions:
+        return expr.function_name, registry.functions[expr.function_name]
     for function_id, function in registry.functions.items():
         if function.full_name == expr.function_name or function.name == expr.function_name:
             return function_id, function
@@ -1042,13 +717,6 @@ def _bo_has_naming_sql(bo: Any, naming_sql: str) -> bool:
 
 def _resolve_naming_sql_matches(expr: QueryCallPlanNode, env: FilteredEnvironment) -> list[tuple[str, Any, Any]]:
     matches: list[tuple[str, Any, Any]] = []
-    if expr.bo_id and expr.bo_id in env.registry.bos:
-        bo = env.registry.bos[expr.bo_id]
-        result = _resolve_naming_sql_for_bo(bo, expr)
-        if result is not None:
-            matches.append((expr.bo_id, bo, result))
-        return matches
-
     bo_id, bo = _resolve_bo(expr, env)
     if bo is not None and bo_id is not None:
         result = _resolve_naming_sql_for_bo(bo, expr)
@@ -1064,7 +732,10 @@ def _resolve_naming_sql_matches(expr: QueryCallPlanNode, env: FilteredEnvironmen
 
 
 def _resolve_naming_sql_for_bo(bo: Any, expr: QueryCallPlanNode) -> Any | None:
-    candidate_keys = [str(expr.naming_sql_id or "").strip(), str(expr.source_name or "").strip()]
+    candidate_keys = [
+        str(expr.naming_sql_id or "").strip(),
+        str(expr.source_name or "").strip(),
+    ]
     for key in candidate_keys:
         if not key:
             continue
@@ -1081,26 +752,8 @@ def _resolve_naming_sql_for_bo(bo: Any, expr: QueryCallPlanNode) -> Any | None:
         naming_sql_name = bo.naming_sql_name_by_key.get(key)
         if naming_sql_name:
             param_names = bo.naming_sql_param_names_by_key.get(key) or bo.naming_sql_param_names_by_key.get(naming_sql_name) or []
-            return _legacy_naming_sql_def(naming_sql_name, param_names)
+            return None
     return None
-
-
-def _legacy_naming_sql_def(naming_sql_name: str, param_names: list[str]) -> Any:
-    class _LegacyNamingSQL:
-        def __init__(self, sql_name: str, param_names_: list[str]):
-            self.naming_sql_id = sql_name
-            self.naming_sql_name = sql_name
-            self.params = [
-                _LegacyParam(name=param_name)
-                for param_name in param_names_
-            ]
-
-    class _LegacyParam:
-        def __init__(self, name: str):
-            self.param_name = name
-            self.normalized_type_ref = None
-
-    return _LegacyNamingSQL(naming_sql_name, list(param_names))
 
 
 def _infer_naming_sql_expr_type(expr: ExprPlanNode, env: FilteredEnvironment) -> Any:
@@ -1213,14 +866,6 @@ def _field_name_from_identifier(value: str) -> str:
     return _suffix_name(value)
 
 
-def _function_name_from_identifier(value: str) -> str:
-    return value.split("function:", 1)[1] if value.startswith("function:") else value
-
-
-def _bo_name_from_identifier(value: str) -> str:
-    return value.split("bo:", 1)[1] if value.startswith("bo:") else value
-
-
 def _suffix_name(value: str) -> str:
     return value.split(":")[-1] if value else value
 
@@ -1251,15 +896,12 @@ def _plans_equivalent(left: ProgramPlan, right: ProgramPlan) -> bool:
 
 
 def parse_program_plan_payload(raw: dict[str, Any]) -> ProgramPlan:
-    try:
-        data = dict(raw)
-        if isinstance(data.get("raw_plan"), str):
-            try:
-                data["raw_plan"] = json.loads(data["raw_plan"])
-            except json.JSONDecodeError:
-                data["raw_plan"] = {"raw": data["raw_plan"]}
-        if "raw_plan" not in data:
-            data["raw_plan"] = raw
-        return ProgramPlan.model_validate(data)
-    except ValidationError:
-        return adapt_legacy_plan(raw)
+    data = dict(raw)
+    if isinstance(data.get("raw_plan"), str):
+        try:
+            data["raw_plan"] = json.loads(data["raw_plan"])
+        except json.JSONDecodeError:
+            data["raw_plan"] = {"raw": data["raw_plan"]}
+    if "raw_plan" not in data:
+        data["raw_plan"] = raw
+    return ProgramPlan.model_validate(data)

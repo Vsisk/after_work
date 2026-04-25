@@ -45,6 +45,7 @@ class SelectionResult:
     candidate_ids: List[str] = field(default_factory=list)
     llm_errors: List[LLMErrorRecord] = field(default_factory=list)
     fallback_used: bool = False
+    debug_info: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

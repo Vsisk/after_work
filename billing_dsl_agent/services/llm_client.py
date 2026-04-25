@@ -597,7 +597,7 @@ class OpenAILLMClient(BaseOpenAILLMClient):
                 "type": "json_schema",
                 "json_schema": {
                     "name": response_model.__name__,
-                    "schema": response_model.model_json_schema(),
+                    "schema": response_model.model_json_schema(mode="serialization", by_alias=True),
                     "strict": True,
                 },
             }
