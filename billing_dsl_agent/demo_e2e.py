@@ -13,7 +13,7 @@ from billing_dsl_agent.log_utils import dumps_for_log, get_logger
 from billing_dsl_agent.llm_planner import LLMPlanner
 from billing_dsl_agent.models import LLMAttemptRecord, LLMErrorRecord
 from billing_dsl_agent.models import GenerateDSLRequest, GenerateDSLResponse, NodeDef
-from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
+from billing_dsl_agent.resource_loader import ResourceLoader
 from billing_dsl_agent.semantic_selector import OpenAISemanticSelector
 from billing_dsl_agent.services.llm_client import OpenAILLMClient, StructuredExecutionResult
 
@@ -309,7 +309,7 @@ class OpenAIExecutorAdapter:
 
 def build_demo_agent(mode: str = "stub") -> DSLAgent:
     dataset = build_demo_dataset()
-    loader = ResourceLoader(provider=InMemoryResourceProvider(dataset=dataset))
+    loader = ResourceLoader().set_resource_dataset(dataset)
     if mode == "openai":
         client = OpenAIExecutorAdapter()
     else:

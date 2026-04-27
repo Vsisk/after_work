@@ -42,7 +42,7 @@ class FinalValidator:
 @dataclass(slots=True)
 class DSLAgent:
     llm_planner: LLMPlanner
-    resource_loader: ResourceLoader
+    resource_loader: ResourceLoader = 
     resource_normalizer: ResourceNormalizer = field(default_factory=ResourceNormalizer)
     environment_builder: EnvironmentBuilder = field(default_factory=EnvironmentBuilder)
     plan_validator: PlanValidator | None = None

@@ -2,7 +2,7 @@ from billing_dsl_agent.agent_entry import DSLAgent
 from billing_dsl_agent.environment import EnvironmentBuilder
 from billing_dsl_agent.llm_planner import LLMPlanner, StubOpenAIClient
 from billing_dsl_agent.models import GenerateDSLRequest, NodeDef
-from billing_dsl_agent.resource_loader import InMemoryResourceProvider, ResourceLoader
+from billing_dsl_agent.resource_loader import ResourceLoader
 from billing_dsl_agent.resource_normalizer import ResourceNormalizer
 from billing_dsl_agent.semantic_selector import MockSemanticSelector
 
@@ -155,8 +155,7 @@ def _request(is_ab: bool = False, ab_sources: list[str] | None = None) -> Genera
 
 
 def _build_agent(plan_response: dict, repair_response: dict | None = None) -> DSLAgent:
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    loader = ResourceLoader(provider=provider)
+    loader = ResourceLoader().set_resource_dataset(_dataset())
     planner = LLMPlanner(
         StubOpenAIClient(
             plan_response=plan_response,
@@ -168,8 +167,7 @@ def _build_agent(plan_response: dict, repair_response: dict | None = None) -> DS
 
 
 def _build_filtered_env():
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    loader = ResourceLoader(provider=provider)
+    loader = ResourceLoader().set_resource_dataset(_dataset())
     loaded = loader.load("site-a", "proj-1")
     registry = ResourceNormalizer().normalize(loaded)
     return EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=4)).build_filtered_environment(
@@ -177,6 +175,56 @@ def _build_filtered_env():
         user_query="generate title from customer gender",
         registry=registry,
     )
+
+
+def test_resource_loader_is_singleton_and_reuses_site_project_cache_without_diff() -> None:
+    loader = ResourceLoader.get_instance().set_resource_dataset(_dataset())
+
+    first = loader.load("site-a", "proj-1")
+    second = ResourceLoader().load("site-a", "proj-1")
+
+    assert ResourceLoader() is loader
+    assert first is second
+    assert loader.is_cached("site-a", "proj-1") is True
+
+
+def test_resource_loader_fetches_latest_payload_each_task_without_dataset() -> None:
+    call_count = {"value": 0}
+    loader = ResourceLoader.get_instance()
+
+    def get_resource_from_file(site_id: str, project_id: str) -> dict:
+        call_count["value"] += 1
+        return _dataset().get((site_id, project_id), {})
+
+    loader._get_resource_from_file = get_resource_from_file
+    loader._resource_dataset = None
+    loader.clear_cache()
+
+    first = loader.load("site-a", "proj-1")
+    second = loader.load("site-a", "proj-1")
+
+    assert first is second
+    assert call_count["value"] == 2
+    assert loader.is_cached("site-a", "proj-1") is True
+
+
+def test_resource_loader_refreshes_cache_when_site_project_payload_changes() -> None:
+    dataset = _dataset()
+    loader = ResourceLoader().set_resource_dataset(dataset)
+
+    first = loader.load("site-a", "proj-1")
+    dataset[("site-a", "proj-1")]["function"]["func"][0]["func_list"].append(
+        {
+            "func_name": "FormatTitle",
+            "func_desc": "format customer title",
+            "param_list": [{"param_name": "title", "type": "String"}],
+            "return_type": {"data_type_name": "string"},
+        }
+    )
+    second = loader.load("site-a", "proj-1")
+
+    assert first is not second
+    assert len(first.function_payload["functions"]) + 1 == len(second.function_payload["functions"])
 
 
 def test_loader_normalization_and_filtering_pipeline() -> None:
@@ -210,8 +258,7 @@ def test_only_parent_or_parent_list_provide_local_context() -> None:
 
 
 def test_bo_filter_respects_is_ab_data_source() -> None:
-    provider = InMemoryResourceProvider(dataset=_dataset())
-    registry = ResourceNormalizer().normalize(ResourceLoader(provider=provider).load("site-a", "proj-1"))
+    registry = ResourceNormalizer().normalize(ResourceLoader().set_resource_dataset(_dataset()).load("site-a", "proj-1"))
     filtered_non_ab = EnvironmentBuilder(semantic_selector=MockSemanticSelector(top_k=5)).build_filtered_environment(
         node_info=_request(is_ab=False).node_def,
         user_query="query invoice",

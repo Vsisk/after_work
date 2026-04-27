@@ -274,13 +274,29 @@ class VarRefPlanNode(StrictModel):
 
 
 class QueryFilterPlanNode(StrictModel):
-    field: str
-    value: "ExprPlanNode"
+    field: str = Field(validation_alias=AliasChoices("field", "param_name"))
+    value: "ExprPlanNode" = Field(validation_alias=AliasChoices("value", "value_expr"))
+
+    @property
+    def param_name(self) -> str:
+        return self.field
+
+    @property
+    def value_expr(self) -> "ExprPlanNode":
+        return self.value
 
 
 class QueryPairPlanNode(StrictModel):
-    key: str
-    value: "ExprPlanNode"
+    key: str = Field(validation_alias=AliasChoices("key", "param_name"))
+    value: "ExprPlanNode" = Field(validation_alias=AliasChoices("value", "value_expr"))
+
+    @property
+    def param_name(self) -> str:
+        return self.key
+
+    @property
+    def value_expr(self) -> "ExprPlanNode":
+        return self.value
 
 
 class FunctionCallPlanNode(StrictModel):
@@ -299,8 +315,16 @@ class QueryCallPlanNode(StrictModel):
     data_source: str | None = None
     naming_sql_id: str | None = None
     filters: List[QueryFilterPlanNode] = Field(default_factory=list)
-    where: ExprPlanNode | None = None
-    pairs: List[QueryPairPlanNode] = Field(default_factory=list)
+    where: ExprPlanNode | None = Field(default=None, validation_alias=AliasChoices("where", "filter_expr"))
+    pairs: List[QueryPairPlanNode] = Field(default_factory=list, validation_alias=AliasChoices("pairs", "params"))
+
+    @property
+    def filter_expr(self) -> ExprPlanNode | None:
+        return self.where
+
+    @property
+    def params(self) -> List[QueryPairPlanNode]:
+        return self.pairs
 
 
 class IfPlanNode(StrictModel):
